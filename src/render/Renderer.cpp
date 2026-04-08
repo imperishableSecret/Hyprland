@@ -2129,8 +2129,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
 static const hdr_output_metadata NO_HDR_METADATA = {.hdmi_metadata_type1 = hdr_metadata_infoframe{.eotf = 0}};
 
-
-static bool hdrMetadataStructurallyEqual(const hdr_output_metadata& a, const hdr_output_metadata& b) {
+static bool                      hdrMetadataStructurallyEqual(const hdr_output_metadata& a, const hdr_output_metadata& b) {
     if (a.metadata_type != b.metadata_type)
         return false;
     const auto& ai = a.hdmi_metadata_type1;
@@ -2140,14 +2139,13 @@ static bool hdrMetadataStructurallyEqual(const hdr_output_metadata& a, const hdr
     if (ai.eotf == 0)
         return true; // both SDR
     return ai.display_primaries[0].x == bi.display_primaries[0].x && ai.display_primaries[0].y == bi.display_primaries[0].y &&
-           ai.display_primaries[1].x == bi.display_primaries[1].x && ai.display_primaries[1].y == bi.display_primaries[1].y &&
-           ai.display_primaries[2].x == bi.display_primaries[2].x && ai.display_primaries[2].y == bi.display_primaries[2].y &&
-           ai.white_point.x == bi.white_point.x && ai.white_point.y == bi.white_point.y &&
-           ai.max_display_mastering_luminance == bi.max_display_mastering_luminance &&
-           ai.min_display_mastering_luminance == bi.min_display_mastering_luminance; // Compare HDR InfoFrame fields that affect display mode selection
+        ai.display_primaries[1].x == bi.display_primaries[1].x && ai.display_primaries[1].y == bi.display_primaries[1].y &&
+        ai.display_primaries[2].x == bi.display_primaries[2].x && ai.display_primaries[2].y == bi.display_primaries[2].y && ai.white_point.x == bi.white_point.x &&
+        ai.white_point.y == bi.white_point.y && ai.max_display_mastering_luminance == bi.max_display_mastering_luminance &&
+        ai.min_display_mastering_luminance == bi.min_display_mastering_luminance; // Compare HDR InfoFrame fields that affect display mode selection
 }
 
-static hdr_output_metadata       createHDRMetadata(SImageDescription settings, SP<CMonitor> monitor) {
+static hdr_output_metadata createHDRMetadata(SImageDescription settings, SP<CMonitor> monitor) {
     uint8_t eotf = 0;
     switch (settings.transferFunction) {
         case CM_TRANSFER_FUNCTION_GAMMA22:
