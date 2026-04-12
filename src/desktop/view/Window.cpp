@@ -219,23 +219,7 @@ SBoxExtents CWindow::getFullWindowExtents() const {
     maxExtents.bottomRight.y = std::max(EXTENTS.bottomRight.y, maxExtents.bottomRight.y);
 
     if (m_wlSurface->exists() && !m_isX11 && m_popupHead) {
-        CBox surfaceExtents = {0, 0, 0, 0};
-        // TODO: this could be better, perhaps make a getFullWindowRegion?
-        m_popupHead->breadthfirst(
-            [](WP<Desktop::View::CPopup> popup, void* data) {
-                if (!popup->wlSurface() || !popup->wlSurface()->resource())
-                    return;
-
-                CBox* pSurfaceExtents = sc<CBox*>(data);
-                CBox  surf            = CBox{popup->coordsRelativeToParent(), popup->size()};
-                pSurfaceExtents->x    = std::min(surf.x, pSurfaceExtents->x);
-                pSurfaceExtents->y    = std::min(surf.y, pSurfaceExtents->y);
-                if (surf.x + surf.w > pSurfaceExtents->width)
-                    pSurfaceExtents->width = surf.x + surf.w - pSurfaceExtents->x;
-                if (surf.y + surf.h > pSurfaceExtents->height)
-                    pSurfaceExtents->height = surf.y + surf.h - pSurfaceExtents->y;
-            },
-            &surfaceExtents);
+        const auto& surfaceExtents = m_popupHead->popupTreeExtents();
 
         maxExtents.topLeft.x = std::max(-surfaceExtents.x, maxExtents.topLeft.x);
 
@@ -758,7 +742,10 @@ bool CWindow::isInCurvedCorner(double x, double y) {
 
 // checks if the wayland window has a popup at pos
 bool CWindow::hasPopupAt(const Vector2D& pos) {
-    if (m_isX11)
+    if (m_isX11 || !m_popupHead)
+        return false;
+
+    if (m_popupHead->popupTreeCount() == 0)
         return false;
 
     auto popup = m_popupHead->at(pos);
@@ -949,9 +936,7 @@ int CWindow::popupsCount() {
     if (m_isX11 || !m_popupHead)
         return 0;
 
-    int no = -1;
-    m_popupHead->breadthfirst([](WP<Desktop::View::CPopup> p, void* d) { *sc<int*>(d) += 1; }, &no);
-    return no;
+    return m_popupHead->popupTreeCount();
 }
 
 int CWindow::surfacesCount() {
@@ -1378,7 +1363,7 @@ Vector2D CWindow::realToReportPosition() {
     if (!m_isX11)
         return m_realPosition->goal();
 
-    return g_pXWaylandManager->waylandToXWaylandCoords(m_realPosition->goal());
+    return g_pXWaylandManager->waylandToXWaylandCoords(m_realPosition->goal(), m_monitor.lock());
 }
 
 Vector2D CWindow::xwaylandSizeToReal(Vector2D size) {
@@ -1392,7 +1377,7 @@ Vector2D CWindow::xwaylandSizeToReal(Vector2D size) {
 }
 
 Vector2D CWindow::xwaylandPositionToReal(Vector2D pos) {
-    return g_pXWaylandManager->xwaylandToWaylandCoords(pos);
+    return g_pXWaylandManager->xwaylandToWaylandCoords(pos, m_monitor.lock());
 }
 
 void CWindow::updateX11SurfaceScale() {
@@ -2271,7 +2256,7 @@ void CWindow::unmapWindow() {
         PHLWINDOW   candidate    = nextInGroup;
 
         if (!candidate) {
-            if (*FOCUSONCLOSE)
+            if (*FOCUSONCLOSE == 1)
                 candidate = (g_pCompositor->vectorToWindowUnified(g_pInputManager->getMouseCoordsInternal(),
                                                                   Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING));
             else {
@@ -2462,9 +2447,8 @@ void CWindow::unmanagedSetGeometry() {
 
     static auto PXWLFORCESCALEZERO = CConfigValue<Hyprlang::INT>("xwayland:force_zero_scaling");
 
-    const auto  LOGICALPOS = g_pXWaylandManager->xwaylandToWaylandCoords(m_xwaylandSurface->m_geometry.pos());
-
     const auto  PMONITOR       = m_monitor.lock();
+    const auto  LOGICALPOS     = g_pXWaylandManager->xwaylandToWaylandCoords(m_xwaylandSurface->m_geometry.pos(), PMONITOR);
     const auto  XWLSCALE       = (*PXWLFORCESCALEZERO && PMONITOR) ? PMONITOR->m_scale : 1.0;
     const auto  LOGICALGEOSIZE = m_xwaylandSurface->m_geometry.size() / XWLSCALE;
 

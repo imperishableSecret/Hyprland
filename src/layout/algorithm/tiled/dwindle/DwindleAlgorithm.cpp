@@ -129,7 +129,8 @@ void CDwindleAlgorithm::addTarget(SP<ITarget> target) {
     // last fail-safe to avoid duplicate fullscreens
     if ((!OPENINGON || OPENINGON->pTarget.lock() == target) && getNodes() > 1) {
         for (auto& node : m_dwindleNodesData) {
-            if (node->pTarget.lock() && node->pTarget.lock() != target) {
+            auto locked = node->pTarget.lock();
+            if (locked && locked != target) {
                 OPENINGON = node;
                 break;
             }
@@ -220,7 +221,7 @@ void CDwindleAlgorithm::addTarget(SP<ITarget> target) {
                 NEWPARENT->children[1] = OPENINGON;
             }
         }
-    } else if (*PFORCESPLIT == 0 || m_overrideFocalPoint) {
+    } else if (*PFORCESPLIT == 0 || m_overrideFocalPoint || g_layoutManager->dragController()->wasDraggingWindow()) {
         if ((SIDEBYSIDE && MOUSECOORDS.x < NEWPARENT->box.x + (NEWPARENT->box.w / 2.F)) || (!SIDEBYSIDE && MOUSECOORDS.y < NEWPARENT->box.y + (NEWPARENT->box.h / 2.F))) {
             // we are hovering over the first node, make PNODE first.
             NEWPARENT->children[1] = OPENINGON;

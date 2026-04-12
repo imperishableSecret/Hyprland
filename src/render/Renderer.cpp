@@ -393,14 +393,20 @@ void IHyprRenderer::renderWorkspaceWindowsFullscreen(PHLMONITOR pMonitor, PHLWOR
 
     // then render windows over fullscreen.
     for (auto const& w : g_pCompositor->m_windows) {
-        if (w->workspaceID() != pWorkspaceWindow->workspaceID() || !w->m_isFloating || (!w->m_createdOverFullscreen && !w->m_pinned) || (!w->m_isMapped && !w->m_fadingOut) ||
-            w->isFullscreen())
+        const bool shouldSkipWindow = w->workspaceID() != pWorkspaceWindow->workspaceID() || !w->m_isFloating || (!w->m_createdOverFullscreen && !w->m_pinned) ||
+            (!w->m_isMapped && !w->m_fadingOut) || w->isFullscreen();
+
+        if (shouldSkipWindow)
             continue;
 
-        if (w->m_monitor == pWorkspace->m_monitor && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
+        const bool mismatchedSpecialWorkspace = w->m_monitor == pWorkspace->m_monitor && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace();
+
+        if (mismatchedSpecialWorkspace)
             continue;
 
-        if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
+        const bool specialWorkspaceOnDifferentMonitor = pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor;
+
+        if (specialWorkspaceOnDifferentMonitor)
             continue; // special on another are rendered as a part of the base pass
 
         renderWindow(w, pMonitor, time, true, RENDER_PASS_ALL);
@@ -416,7 +422,9 @@ void IHyprRenderer::renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWo
     windows.reserve(g_pCompositor->m_windows.size());
 
     for (auto const& w : g_pCompositor->m_windows) {
-        if (w->isHidden() || (!w->m_isMapped && !w->m_fadingOut))
+        const bool isNotRenderable = w->isHidden() || (!w->m_isMapped && !w->m_fadingOut);
+
+        if (isNotRenderable)
             continue;
 
         if (!shouldRenderWindow(w, pMonitor))
@@ -1879,7 +1887,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     static auto                                           PDAMAGETRACKINGMODE = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
     static auto                                           PDAMAGEBLINK        = CConfigValue<Hyprlang::INT>("debug:damage_blink");
     static auto                                           PSOLDAMAGE          = CConfigValue<Hyprlang::INT>("debug:render_solitary_wo_damage");
-    static auto                                           PVFR                = CConfigValue<Hyprlang::INT>("misc:vfr");
+    static auto                                           PVFR                = CConfigValue<Hyprlang::INT>("debug:vfr");
 
     static int                                            damageBlinkCleanup = 0; // because double-buffered
 

@@ -255,9 +255,12 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     if (PMONITOR->m_cursorZoom->value() != 1.f)
         g_pHyprRenderer->damageMonitor(PMONITOR);
 
-    bool skipFrameSchedule = PMONITOR->shouldSkipScheduleFrameOnMouseEvent();
+    bool       skipFrameSchedule = PMONITOR->shouldSkipScheduleFrameOnMouseEvent();
 
-    if (!PMONITOR->m_solitaryClient.lock() && g_pHyprRenderer->shouldRenderCursor() && g_pPointerManager->softwareLockedFor(PMONITOR->m_self.lock()) && !skipFrameSchedule)
+    const auto solitary = PMONITOR->m_solitaryClient.lock();
+    const auto self     = PMONITOR->m_self.lock();
+
+    if (!solitary && g_pHyprRenderer->shouldRenderCursor() && g_pPointerManager->softwareLockedFor(self) && !skipFrameSchedule)
         g_pCompositor->scheduleFrameForMonitor(PMONITOR, Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
 
     // constraints
@@ -410,8 +413,19 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         foundSurface = g_pCompositor->vectorToLayerSurface(mouseCoords, &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &pFoundLayerSurface);
 
     // then, we check if the workspace doesn't have a fullscreen window
-    const auto PWORKSPACE   = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
-    const auto PWINDOWIDEAL = g_pCompositor->vectorToWindowUnified(mouseCoords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+    const auto PWORKSPACE = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
+
+    bool       windowIdealQueried = false;
+    PHLWINDOW  pWindowIdeal;
+    const auto getWindowIdeal = [&]() -> const PHLWINDOW& {
+        if (!windowIdealQueried) {
+            pWindowIdeal       = g_pCompositor->vectorToWindowUnified(mouseCoords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+            windowIdealQueried = true;
+        }
+
+        return pWindowIdeal;
+    };
+
     if (PWORKSPACE->m_hasFullscreenWindow && PWORKSPACE->m_fullscreenMode == FSMODE_FULLSCREEN) {
         const auto IS_LS_UNFOCUSABLE = pFoundLayerSurface &&
             (pFoundLayerSurface->m_layer < ZWLR_LAYER_SHELL_V1_LAYER_TOP ||
@@ -429,6 +443,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
                 return;
             }
 
+            const auto& PWINDOWIDEAL = getWindowIdeal();
             if (PWINDOWIDEAL &&
                 ((PWINDOWIDEAL->m_isFloating && (PWINDOWIDEAL->m_createdOverFullscreen || PWINDOWIDEAL->m_pinned)) /* floating over fullscreen or pinned */
                  || (PMONITOR->m_activeSpecialWorkspace == PWINDOWIDEAL->m_workspace) /* on an open special workspace */))
@@ -449,9 +464,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         if (PWORKSPACE->m_hasFullscreenWindow && PWORKSPACE->m_fullscreenMode == FSMODE_MAXIMIZED) {
             if (!foundSurface) {
                 if (PMONITOR->m_activeSpecialWorkspace) {
+                    const auto& PWINDOWIDEAL = getWindowIdeal();
                     if (pFoundWindow != PWINDOWIDEAL)
-                        pFoundWindow =
-                            g_pCompositor->vectorToWindowUnified(mouseCoords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+                        pFoundWindow = PWINDOWIDEAL;
 
                     if (pFoundWindow && !pFoundWindow->onSpecialWorkspace()) {
                         pFoundWindow = PWORKSPACE->getFullscreenWindow();
@@ -464,9 +479,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
                     }
 
                     if (!foundSurface) {
+                        const auto& PWINDOWIDEAL = getWindowIdeal();
                         if (pFoundWindow != PWINDOWIDEAL)
-                            pFoundWindow =
-                                g_pCompositor->vectorToWindowUnified(mouseCoords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+                            pFoundWindow = PWINDOWIDEAL;
 
                         if (!(pFoundWindow && (pFoundWindow->m_isFloating && (pFoundWindow->m_createdOverFullscreen || pFoundWindow->m_pinned))))
                             pFoundWindow = PWORKSPACE->getFullscreenWindow();
@@ -475,8 +490,9 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             }
 
         } else {
+            const auto& PWINDOWIDEAL = getWindowIdeal();
             if (pFoundWindow != PWINDOWIDEAL)
-                pFoundWindow = g_pCompositor->vectorToWindowUnified(mouseCoords, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+                pFoundWindow = PWINDOWIDEAL;
         }
 
         if (pFoundWindow) {
@@ -500,7 +516,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     if (!foundSurface)
         foundSurface = g_pCompositor->vectorToLayerSurface(mouseCoords, &PMONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &surfaceCoords, &pFoundLayerSurface);
 
-    if (g_pPointerManager->softwareLockedFor(PMONITOR->m_self.lock()) > 0 && !skipFrameSchedule)
+    if (g_pPointerManager->softwareLockedFor(self) > 0 && !skipFrameSchedule)
         g_pCompositor->scheduleFrameForMonitor(Desktop::focusState()->monitor(), Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
 
     // FIXME: This will be disabled during DnD operations because we do not exactly follow the spec

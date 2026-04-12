@@ -117,8 +117,8 @@ static void handleUnrecoverableSignal(int sig) {
 
     // Kill the program if the crash-reporter is caught in a deadlock.
     signal(SIGALRM, [](int _) {
-        char const* msg = "\nCrashReporter exceeded timeout, forcefully exiting\n";
-        write(2, msg, strlen(msg));
+        char const*           msg = "\nCrashReporter exceeded timeout, forcefully exiting\n";
+        [[maybe_unused]] auto w   = write(2, msg, strlen(msg));
         abort();
     });
     alarm(15);
@@ -550,8 +550,8 @@ void CCompositor::cleanup() {
     if (!m_wlDisplay)
         return;
 
-    if (m_watchdogWriteFd.isValid())
-        write(m_watchdogWriteFd.get(), "end", 3);
+    if (m_watchdogWriteFd.isValid()) [[maybe_unused]]
+        auto w = write(m_watchdogWriteFd.get(), "end", 3);
 
     signal(SIGABRT, SIG_DFL);
     signal(SIGSEGV, SIG_DFL);
@@ -803,8 +803,10 @@ void CCompositor::startCompositor() {
 
     Event::bus()->m_events.ready.emit();
 
-    if (m_watchdogWriteFd.isValid())
-        write(m_watchdogWriteFd.get(), "vax", 3);
+    if (m_watchdogWriteFd.isValid()) {
+        if (write(m_watchdogWriteFd.get(), "vax", 3) < 0)
+            Log::logger->log(Log::ERR, "startCompositor: failed to write to watchdogWriteFd {}: {}", m_watchdogWriteFd.get(), strerror(errno));
+    }
 
     // This blocks until we are done.
     Log::logger->log(Log::DEBUG, "Hyprland is ready, running the event loop!");
@@ -920,7 +922,7 @@ PHLWINDOW CCompositor::vectorToWindowUnified(const Vector2D& pos, uint8_t proper
                 w != pIgnoreWindow && !isShadowedByModal(w)) {
                 const auto BB  = w->getWindowBoxUnified(properties);
                 CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA : 0);
-                if (box.containsPoint(g_pPointerManager->position()))
+                if (box.containsPoint(pos))
                     return w;
 
                 if (!w->m_isX11) {
@@ -962,7 +964,7 @@ PHLWINDOW CCompositor::vectorToWindowUnified(const Vector2D& pos, uint8_t proper
 
                     const auto BB  = w->getWindowBoxUnified(properties);
                     CBox       box = BB.copy().expand(!w->isX11OverrideRedirect() ? BORDER_GRAB_AREA : 0);
-                    if (box.containsPoint(g_pPointerManager->position())) {
+                    if (box.containsPoint(pos)) {
 
                         if (w->m_isX11 && w->isX11OverrideRedirect() && !w->m_xwaylandSurface->wantsFocus()) {
                             // Override Redirect
@@ -1290,6 +1292,8 @@ void CCompositor::changeWindowZOrder(PHLWINDOW pWindow, bool top) {
 
     if (top)
         pWindow->m_createdOverFullscreen = true;
+    else
+        pWindow->m_createdOverFullscreen = false;
 
     if (pWindow == (top ? m_windows.back() : m_windows.front()))
         return;
