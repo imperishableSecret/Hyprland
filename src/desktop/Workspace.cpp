@@ -291,8 +291,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                     else
                         count = getWindows(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>(sc<bool>(wantsOnlyTiled)),
                                            wantsOnlyPinned ? std::optional<bool>(wantsOnlyPinned) : std::nullopt,
-                                           wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt,
-                                           wantsOnlyInView ? std::optional<bool>(true) : std::nullopt);
+                                           wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt, wantsOnlyInView ? std::optional<bool>(true) : std::nullopt);
 
                     if (count != from)
                         return false;
@@ -328,8 +327,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                 else
                     count = getWindows(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>(sc<bool>(wantsOnlyTiled)),
                                        wantsOnlyPinned ? std::optional<bool>(wantsOnlyPinned) : std::nullopt,
-                                       wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt,
-                                       wantsOnlyInView ? std::optional<bool>(true) : std::nullopt);
+                                       wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt, wantsOnlyInView ? std::optional<bool>(true) : std::nullopt);
 
                 if (std::clamp(count, from, to) != count)
                     return false;
