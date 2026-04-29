@@ -3,6 +3,7 @@
 #include "../view/LayerSurface.hpp"
 #include "../../Compositor.hpp"
 #include "../../event/EventBus.hpp"
+#include "../../managers/eventLoop/EventLoopManager.hpp"
 
 using namespace Desktop;
 using namespace Desktop::Rule;
@@ -13,7 +14,15 @@ SP<CRuleEngine> Rule::ruleEngine() {
 }
 
 CRuleEngine::CRuleEngine() {
-    m_targetsUpdatedHook = Event::bus()->m_events.workspace.targetsUpdated.listen([this](const PHLWORKSPACE&) { updateAllRules(); });
+    m_targetsUpdatedHook = Event::bus()->m_events.workspace.targetsUpdated.listen([this](const PHLWORKSPACE&) {
+        if (m_ruleUpdatePending)
+            return;
+        m_ruleUpdatePending = true;
+        g_pEventLoopManager->doLater([this] {
+            m_ruleUpdatePending = false;
+            updateAllRules();
+        });
+    });
 }
 
 void CRuleEngine::registerRule(SP<IRule>&& rule) {

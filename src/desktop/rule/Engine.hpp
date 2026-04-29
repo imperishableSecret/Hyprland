@@ -20,6 +20,7 @@ namespace Desktop::Rule {
       private:
         std::vector<SP<IRule>> m_rules;
         CHyprSignalListener    m_targetsUpdatedHook;
+        bool                   m_ruleUpdatePending = false;
     };
 
     SP<CRuleEngine> ruleEngine();

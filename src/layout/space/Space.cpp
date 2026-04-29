@@ -59,6 +59,7 @@ void CSpace::move(SP<ITarget> t, std::optional<Vector2D> focalPoint) {
 }
 
 void CSpace::remove(SP<ITarget> t) {
+    m_lastVisibleTargets.erase(t.get());
     std::erase_if(m_targets, [&t](const auto& e) { return !e || e == t; });
 
     recheckWorkArea();
