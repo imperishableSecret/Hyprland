@@ -128,7 +128,8 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
             // w - windowCount: w[1-4] or w[1], optional flag t or f for tiled or floating and
             //                  flag p to count only pinned windows, e.g. w[p1-2], w[pg4]
             //                  flag g to count groups instead of windows, e.g. w[t1-2], w[fg4]
-            //                  flag v will count only visible windows
+            //                  flag v will count only visible (non-hidden) windows
+            //                  flag i will count only in-viewport windows (geometry intersects monitor viewport)
             // f - fullscreen state : f[-1], f[0], f[1], or f[2] for different fullscreen states
             //                        -1: no fullscreen, 0: fullscreen, 1: maximized, 2: fullscreen without sending fs state to window
 
@@ -239,6 +240,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                 int  wantsOnlyPinned   = false;
                 bool wantsCountGroup   = false;
                 bool wantsCountVisible = false;
+                bool wantsOnlyInView   = false;
 
                 int  flagCount = 0;
                 for (auto const& flag : prop) {
@@ -256,6 +258,9 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                         flagCount++;
                     } else if (flag == 'v' && !wantsCountVisible) {
                         wantsCountVisible = true;
+                        flagCount++;
+                    } else if (flag == 'i' && !wantsOnlyInView) {
+                        wantsOnlyInView = true;
                         flagCount++;
                     } else {
                         break;
@@ -286,7 +291,8 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                     else
                         count = getWindows(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>(sc<bool>(wantsOnlyTiled)),
                                            wantsOnlyPinned ? std::optional<bool>(wantsOnlyPinned) : std::nullopt,
-                                           wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
+                                           wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt,
+                                           wantsOnlyInView ? std::optional<bool>(true) : std::nullopt);
 
                     if (count != from)
                         return false;
@@ -322,7 +328,8 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                 else
                     count = getWindows(wantsOnlyTiled == -1 ? std::nullopt : std::optional<bool>(sc<bool>(wantsOnlyTiled)),
                                        wantsOnlyPinned ? std::optional<bool>(wantsOnlyPinned) : std::nullopt,
-                                       wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt);
+                                       wantsCountVisible ? std::optional<bool>(wantsCountVisible) : std::nullopt,
+                                       wantsOnlyInView ? std::optional<bool>(true) : std::nullopt);
 
                 if (std::clamp(count, from, to) != count)
                     return false;
@@ -412,11 +419,13 @@ bool CWorkspace::isVisibleNotCovered() {
     return PMONITOR->m_activeWorkspace->m_id == m_id;
 }
 
-int CWorkspace::getWindows(std::optional<bool> onlyTiled, std::optional<bool> onlyPinned, std::optional<bool> onlyVisible) {
+int CWorkspace::getWindows(std::optional<bool> onlyTiled, std::optional<bool> onlyPinned, std::optional<bool> onlyVisible, std::optional<bool> onlyInView) {
     int no = 0;
 
     if (!m_space)
         return 0;
+
+    const auto PMONITOR = onlyInView.has_value() ? m_monitor.lock() : nullptr;
 
     for (auto const& t : m_space->targets()) {
         if (!t)
@@ -428,6 +437,10 @@ int CWorkspace::getWindows(std::optional<bool> onlyTiled, std::optional<bool> on
             continue;
         if (onlyVisible.has_value() && (!t->window() || t->window()->isHidden() == onlyVisible.value()))
             continue;
+        if (onlyInView.has_value() && onlyInView.value()) {
+            if (!PMONITOR || t->position().intersection(PMONITOR->logicalBox()).empty())
+                continue;
+        }
         no++;
     }
 
