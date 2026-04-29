@@ -754,3 +754,30 @@ TEST_CASE(workspacesCombined) {
     NLog::log("{}Expecting 0 windows", Colors::YELLOW);
     ASSERT(Tests::windowCount(), 0);
 }
+
+TEST_CASE(workspaceInViewFilter) {
+    NLog::log("{}Testing w[i] in-view workspace selector", Colors::YELLOW);
+
+    ASSERT(Tests::windowCount(), 0);
+    OK(getFromSocket("/dispatch hl.dsp.focus({ workspace = '50' })"));
+
+    // Apply border_size = 42 only when exactly 1 tiled window physically intersects the viewport.
+    // r[50-50] pins the rule to workspace 50; w[ti1] requires exactly 1 tiled in-view window.
+    OK(getFromSocket("r/eval hl.workspace_rule({ workspace = 'r[50-50] w[ti1]', border_size = 42 })"));
+
+    if (!Tests::spawnKitty("wif_win1"))
+        FAIL_TEST("Could not spawn wif_win1");
+
+    // 1 tiled window, all in viewport → rule matches
+    ASSERT(getFromSocket("/getprop class:wif_win1 border_size"), "42");
+
+    if (!Tests::spawnKitty("wif_win2"))
+        FAIL_TEST("Could not spawn wif_win2");
+
+    // 2 tiled windows in viewport → w[ti1] no longer matches → border_size back to default
+    ASSERT(getFromSocket("/getprop class:wif_win1 border_size"), "2");
+
+    OK(getFromSocket("/reload"));
+    Tests::killAllWindows();
+    ASSERT(Tests::windowCount(), 0);
+}
