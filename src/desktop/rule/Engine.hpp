@@ -1,11 +1,12 @@
 #pragma once
 
 #include "Rule.hpp"
+#include "../../helpers/signal/Signal.hpp"
 
 namespace Desktop::Rule {
     class CRuleEngine {
       public:
-        CRuleEngine()  = default;
+        CRuleEngine();
         ~CRuleEngine() = default;
 
         void                          registerRule(SP<IRule>&& rule);
@@ -18,6 +19,7 @@ namespace Desktop::Rule {
 
       private:
         std::vector<SP<IRule>> m_rules;
+        CHyprSignalListener    m_targetsUpdatedHook;
     };
 
     SP<CRuleEngine> ruleEngine();

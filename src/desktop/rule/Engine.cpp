@@ -2,6 +2,7 @@
 #include "Rule.hpp"
 #include "../view/LayerSurface.hpp"
 #include "../../Compositor.hpp"
+#include "../../event/EventBus.hpp"
 
 using namespace Desktop;
 using namespace Desktop::Rule;
@@ -9,6 +10,10 @@ using namespace Desktop::Rule;
 SP<CRuleEngine> Rule::ruleEngine() {
     static SP<CRuleEngine> engine = makeShared<CRuleEngine>();
     return engine;
+}
+
+CRuleEngine::CRuleEngine() {
+    m_targetsUpdatedHook = Event::bus()->m_events.workspace.targetsUpdated.listen([this](const PHLWORKSPACE&) { updateAllRules(); });
 }
 
 void CRuleEngine::registerRule(SP<IRule>&& rule) {
