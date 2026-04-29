@@ -129,6 +129,7 @@ namespace Event {
                 Event<PHLWORKSPACE>             active;
                 Event<PHLWORKSPACEREF>          created;
                 Event<PHLWORKSPACEREF>          removed;
+                Event<PHLWORKSPACE>             targetsUpdated;
             } workspace;
 
             struct {

@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <expected>
+#include <set>
 
 namespace Layout {
     class ITarget;
@@ -67,5 +68,8 @@ namespace Layout {
 
         // for recalc
         CHyprSignalListener m_geomUpdateCallback;
+
+        // change-detection: emit targetsUpdated only when physically-visible set changes
+        std::set<ITarget*> m_lastVisibleTargets;
     };
 };

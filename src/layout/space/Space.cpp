@@ -151,6 +151,26 @@ void CSpace::recalculate() {
 
     if (m_algorithm)
         m_algorithm->recalculate();
+
+    const auto WS = m_parent.lock();
+    if (!WS)
+        return;
+    const auto MON = WS->m_monitor.lock();
+    if (!MON)
+        return;
+
+    const CBox         viewport = MON->logicalBox();
+    std::set<ITarget*> visible;
+    for (auto const& wt : m_targets) {
+        const auto t = wt.lock();
+        if (t && !t->position().intersection(viewport).empty())
+            visible.insert(t.get());
+    }
+
+    if (visible != m_lastVisibleTargets) {
+        m_lastVisibleTargets = visible;
+        Event::bus()->m_events.workspace.targetsUpdated.emit(WS);
+    }
 }
 
 void CSpace::setFullscreen(SP<ITarget> t, eFullscreenMode mode) {
