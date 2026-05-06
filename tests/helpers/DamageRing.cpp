@@ -230,14 +230,14 @@ TEST(DamageRing, getBufferDamageCoalescesWhenTooManyRects) {
     ring.setSize({500, 500});
     ring.rotate();
 
-    // Add many non-overlapping rects across several frames so that
-    // accumulation produces more than 8 rectangles, triggering the
-    // getExtents() fallback path.
+    // Add many nearby non-overlapping rects across several frames so that
+    // accumulation produces more than 8 rectangles, but the extents area stays
+    // close to the exact damaged area.
     int x = 0;
     for (int frame = 0; frame < DAMAGE_RING_PREVIOUS_LEN; ++frame) {
         for (int r = 0; r < 4; ++r) {
             ring.damage(CRegion(x, 0, 5, 5));
-            x += 10;
+            x += 6;
         }
         ring.rotate();
     }
@@ -250,6 +250,34 @@ TEST(DamageRing, getBufferDamageCoalescesWhenTooManyRects) {
     EXPECT_FALSE(buf.empty());
 
     // The result should be coalesced into a single extents rect (<=1 rect)
+    EXPECT_LE(buf.getRects().size(), 1);
+}
+
+TEST(DamageRing, getBufferDamageKeepsSparseRectsOverSoftLimit) {
+    CDamageRing ring;
+    ring.setSize({1000, 100});
+    ring.rotate();
+
+    for (int i = 0; i < 9; ++i) {
+        ring.damage(CRegion(i * 100, 0, 5, 5));
+    }
+
+    CRegion buf = ring.getBufferDamage(1);
+
+    EXPECT_EQ(buf.getRects().size(), 9u);
+}
+
+TEST(DamageRing, getBufferDamageCoalescesPathologicalSparseRects) {
+    CDamageRing ring;
+    ring.setSize({4000, 100});
+    ring.rotate();
+
+    for (int i = 0; i < 33; ++i) {
+        ring.damage(CRegion(i * 100, 0, 5, 5));
+    }
+
+    CRegion buf = ring.getBufferDamage(1);
+
     EXPECT_LE(buf.getRects().size(), 1);
 }
 
