@@ -1587,6 +1587,8 @@ void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, c
                 damageClip.intersect(data.clipRegion);
         }
 
+        damageClip.intersect(*data.damage);
+
         if (!damageClip.empty()) {
             damageClip.forEachRect([this](const auto& RECT) {
                 scissor(&RECT, g_pHyprRenderer->m_renderData.transformDamage);
