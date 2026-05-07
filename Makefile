@@ -92,7 +92,7 @@ asan:
 	cmake --build ./build --config Debug --target all
 	@echo "Hyprland done"
 
-	ASAN_OPTIONS="detect_odr_violation=0,log_path=asan.log" HYPRLAND_NO_CRASHREPORTER=1 ./build/Hyprland -c ~/.config/hypr/hyprland.conf
+	ASAN_OPTIONS="detect_odr_violation=0,log_path=asan.log" HYPRLAND_NO_CRASHREPORTER=1 ./build/Hyprland -c ~/.config/hypr/hyprland.lua
 
 format-check:
 	@find src hyprctl hyprpm start tests -type f \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) \

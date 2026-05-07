@@ -3,6 +3,7 @@
 #include "../../../managers/eventLoop/EventLoopManager.hpp"
 #include "../../../managers/input/InputManager.hpp"
 #include "../../../render/Renderer.hpp"
+#include "../../../render/decorations/CHyprGroupBarDecoration.hpp"
 #include "../../../Compositor.hpp"
 #include "../../../layout/supplementary/WorkspaceAlgoMatcher.hpp"
 #include "../../../layout/LayoutManager.hpp"
@@ -21,7 +22,7 @@ UP<CPropRefresher>& Supplementary::refresher() {
 }
 
 void CPropRefresher::scheduleRefresh(PropRefreshBits prop) {
-    static auto PZOOMFACTOR = CConfigValue<Config::FLOAT>("cursor.zoom_factor");
+    static auto PZOOMFACTOR = CConfigValue<Config::FLOAT>("cursor:zoom_factor");
 
     m_propsTripped |= prop;
 
@@ -95,6 +96,9 @@ void CPropRefresher::scheduleRefresh(PropRefreshBits prop) {
 
             if (m_propsTripped & REFRESH_CONFIG_WATCHER)
                 Config::watcher()->update();
+
+            if (m_propsTripped & REFRESH_GRADIENTS_GROUPBAR)
+                refreshGroupBarGradients();
 
             m_scheduled    = false;
             m_propsTripped = 0;

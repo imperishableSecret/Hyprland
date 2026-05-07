@@ -16,8 +16,16 @@ std::expected<SConfigStateReply, std::string> Jeremy::getMainConfigPath() {
         std::error_code ec;
         auto            p2 = p;
         p2.replace_extension(".lua");
+
+        // if we don't have a .conf file, use lua by default.
+        if (!std::filesystem::exists(p, ec) || ec)
+            return p2;
+
+        // if we have a .lua file, use that
         if (std::filesystem::exists(p2, ec) && !ec)
             return p2;
+
+        // otherwise use .conf
         return p;
     };
 

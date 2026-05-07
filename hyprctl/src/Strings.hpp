@@ -107,7 +107,7 @@ time_ms:
     Time to display notification in milliseconds
 
 color:
-    Notification color. Format is the same as for colors in hyprland.conf. Use
+    Notification color. Format is the same as for colors in hyprland.lua. Use
     0 for default color for icon
 
 message:

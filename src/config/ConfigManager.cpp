@@ -30,7 +30,7 @@ bool Config::initConfigManager() {
         Log::logger->log(Log::DEBUG, "[cfg] Regular config at {}", filePath.string());
 
         std::error_code ec;
-        if (std::filesystem::exists(filePath, ec) && !ec && filePath.extension() == ".lua") {
+        if (filePath.extension() == ".lua") {
             // we have lua!
             Log::logger->log(Log::DEBUG, "[cfg] Using lua config found at {}", filePath.string());
             g_mgr = makeUnique<Lua::CConfigManager>();
@@ -42,7 +42,7 @@ bool Config::initConfigManager() {
     } else {
         Log::logger->log(Log::DEBUG, "[cfg] Config is either explicit or special.");
 
-        if (filePath.extension() == ".lua" || filePath.extension() == "lua") {
+        if (filePath.extension() == ".lua") {
             Log::logger->log(Log::DEBUG, "[cfg] Config is lua, loading lua mgr");
             g_mgr = makeUnique<Lua::CConfigManager>();
         } else {
