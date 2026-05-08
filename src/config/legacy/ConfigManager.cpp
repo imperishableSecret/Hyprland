@@ -57,6 +57,7 @@
 #include "../../managers/input/trackpad/gestures/FloatGesture.hpp"
 #include "../../managers/input/trackpad/gestures/FullscreenGesture.hpp"
 #include "../../managers/input/trackpad/gestures/CursorZoomGesture.hpp"
+#include "../../managers/input/trackpad/gestures/ScrollMoveGesture.hpp"
 
 #include "../../event/EventBus.hpp"
 
@@ -1055,8 +1056,7 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
     // update plugins
     handlePluginLoads();
 
-    if (!m_isFirstLaunch)
-        Config::Supplementary::refresher()->scheduleRefresh(Supplementary::REFRESH_ALL);
+    Config::Supplementary::refresher()->scheduleRefresh(Supplementary::REFRESH_ALL);
 
     Event::bus()->m_events.config.reloaded.emit();
     if (g_pEventManager)
@@ -1984,7 +1984,9 @@ std::optional<std::string> CConfigManager::handleGesture(const std::string& comm
     else if (data[startDataIdx] == "cursorZoom") {
         result = g_pTrackpadGestures->addGesture(makeUnique<CCursorZoomTrackpadGesture>(std::string{data[startDataIdx + 1]}, std::string{data[startDataIdx + 2]}), fingerCount,
                                                  direction, modMask, deltaScale, disableInhibit);
-    } else if (data[startDataIdx] == "unset")
+    } else if (data[startDataIdx] == "scrollMove")
+        result = g_pTrackpadGestures->addGesture(makeUnique<CScrollMoveTrackpadGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
+    else if (data[startDataIdx] == "unset")
         result = g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
     else
         return std::format("Invalid gesture: {}", data[startDataIdx]);
