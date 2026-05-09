@@ -54,3 +54,5 @@ example/hyprland.desktop
 debug-tools/flamegraph
 
 meta/hl.meta.lua
+
+hyprtester/pointer-scroll.txt

@@ -146,11 +146,11 @@ SP<CAlgorithm> CSpace::algorithm() const {
     return m_algorithm;
 }
 
-void CSpace::recalculate() {
+void CSpace::recalculate(eRecalculateReason reason) {
     recheckWorkArea();
 
     if (m_algorithm)
-        m_algorithm->recalculate();
+        m_algorithm->recalculate(reason);
 }
 
 eFullscreenRequestResult CSpace::setFullscreen(SP<ITarget> t, eFullscreenMode currentEffectiveMode, eFullscreenMode mode) {
@@ -173,7 +173,7 @@ eFullscreenRequestResult CSpace::setFullscreen(SP<ITarget> t, eFullscreenMode cu
     if (mode == FSMODE_NONE && m_algorithm && t->floating())
         m_algorithm->recenter(t);
 
-    recalculate();
+    recalculate(RECALCULATE_REASON_TOGGLE_FULLSCREEN);
 
     return REQUEST_RESULT;
 }
@@ -218,6 +218,21 @@ SP<ITarget> CSpace::getNextCandidate(SP<ITarget> old) {
     return !m_algorithm ? nullptr : m_algorithm->getNextCandidate(old);
 }
 
+bool Layout::isHardRecalculateReason(eRecalculateReason reason) {
+    return reason != RECALCULATE_REASON_WORKSPACE_CHANGE && reason != RECALCULATE_REASON_SPECIAL_WORKSPACE_TOGGLE && reason != RECALCULATE_REASON_TOGGLE_FULLSCREEN &&
+        reason != RECALCULATE_REASON_INVALIDATE_MONITOR_GEOMETRIES && reason != RECALCULATE_REASON_RENDER_MOINTOR;
+}
+
 const std::vector<WP<ITarget>>& CSpace::targets() const {
     return m_targets;
+}
+
+eRecalculateReason Layout::recalcMonitorReasonToRecalcReason(CLayoutManager::eRecalculateMonitorReason reason) {
+    // If eRecalculateMonitorReason doesn't have a eRecalculateReason pair, it'll return nullopt
+    switch (reason) {
+        case CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_SPECIAL_WORKSPACE: return RECALCULATE_REASON_SPECIAL_WORKSPACE_TOGGLE;
+        case CLayoutManager::RECALCULATE_MONITOR_REASON_WORKSPACE_CHANGE: return RECALCULATE_REASON_WORKSPACE_CHANGE;
+        case CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN: return RECALCULATE_REASON_TOGGLE_FULLSCREEN;
+        default: return RECALCULATE_REASON_UNKNOWN;
+    }
 }

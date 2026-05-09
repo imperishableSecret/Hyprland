@@ -2,6 +2,7 @@
 #include "view/Group.hpp"
 #include "view/LayerSurface.hpp"
 #include "../Compositor.hpp"
+#include "../config/shared/parserUtils/ParserUtils.hpp"
 #include "../config/shared/animation/AnimationTree.hpp"
 #include "../config/shared/workspace/WorkspaceRuleManager.hpp"
 #include "../config/supplementary/executor/Executor.hpp"
@@ -16,6 +17,7 @@
 #include <hyprutils/animation/AnimatedVariable.hpp>
 #include <hyprutils/string/String.hpp>
 using namespace Hyprutils::String;
+using namespace Desktop::View;
 
 PHLWORKSPACE CWorkspace::create(WORKSPACEID id, PHLMONITOR monitor, std::string name, bool special, bool isEmpty) {
     PHLWORKSPACE workspace = makeShared<CWorkspace>(id, monitor, name, special, isEmpty);
@@ -198,7 +200,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
 
                 prop = prop.substr(2, prop.length() - 3);
 
-                const auto SHOULDBESPECIAL = configStringToInt(prop);
+                const auto SHOULDBESPECIAL = Config::ParserUtils::parseInt(prop);
 
                 if (SHOULDBESPECIAL && sc<bool>(*SHOULDBESPECIAL) != m_isSpecialWorkspace)
                     return false;
@@ -233,7 +235,7 @@ bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
                 if (prop.starts_with("e:") && !m_name.ends_with(prop.substr(2)))
                     return false;
 
-                const auto WANTSNAMED = configStringToInt(prop);
+                const auto WANTSNAMED = Config::ParserUtils::parseInt(prop);
 
                 if (WANTSNAMED && *WANTSNAMED != (m_id <= -1337))
                     return false;
@@ -436,11 +438,14 @@ int CWorkspace::getWindows(std::optional<bool> onlyTiled, std::optional<bool> on
         if (!t)
             continue;
 
+        const auto visibilityFulfilled =
+            t->window() && !t->window()->isHidden() && !t->window()->isInputBlocked(INPUT_BLOCK_GROUP_INACTIVE | INPUT_BLOCK_MONOCLE_INACTIVE | INPUT_BLOCK_BELOW_FULLSCREEN);
+
         if (onlyTiled.has_value() && t->floating() == onlyTiled.value())
             continue;
         if (onlyPinned.has_value() && (!t->window() || t->window()->m_pinned != onlyPinned.value()))
             continue;
-        if (onlyVisible.has_value() && (!t->window() || t->window()->targetVisible() != onlyVisible.value()))
+        if (onlyVisible.has_value() && (!t->window() || visibilityFulfilled != onlyVisible.value()))
             continue;
         no++;
     }
@@ -453,13 +458,16 @@ int CWorkspace::getGroups(std::optional<bool> onlyTiled, std::optional<bool> onl
     for (auto const& g : Desktop::View::groups()) {
         const auto HEAD = g->head();
 
+        const auto visibilityFulfilled =
+            g->current() && !g->current()->isHidden() && !g->current()->isInputBlocked(INPUT_BLOCK_GROUP_INACTIVE | INPUT_BLOCK_MONOCLE_INACTIVE | INPUT_BLOCK_BELOW_FULLSCREEN);
+
         if (HEAD->workspaceID() != m_id || !HEAD->m_isMapped)
             continue;
         if (onlyTiled.has_value() && HEAD->m_isFloating == onlyTiled.value())
             continue;
         if (onlyPinned.has_value() && HEAD->m_pinned != onlyPinned.value())
             continue;
-        if (onlyVisible.has_value() && g->current()->targetVisible() != onlyVisible.value())
+        if (onlyVisible.has_value() && visibilityFulfilled != onlyVisible.value())
             continue;
         no++;
     }

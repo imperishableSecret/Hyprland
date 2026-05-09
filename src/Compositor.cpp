@@ -2288,7 +2288,7 @@ void CCompositor::setWindowFullscreenState(const PHLWINDOW PWINDOW, Desktop::Vie
                                                  Desktop::Rule::RULE_PROP_FULLSCREENSTATE_INTERNAL | Desktop::Rule::RULE_PROP_ON_WORKSPACE);
 
     PWINDOW->updateDecorationValues();
-    g_layoutManager->recalculateMonitor(PMONITOR);
+    g_layoutManager->recalculateMonitor(PMONITOR, Layout::CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN);
 
     // make all windows and layers on the same workspace under the fullscreen window
     for (auto const& w : m_windows) {
@@ -2310,6 +2310,11 @@ void CCompositor::setWindowFullscreenState(const PHLWINDOW PWINDOW, Desktop::Vie
 
     PWINDOW->sendWindowSize(true);
 
+    // recheck the work area again because visibility checks report 1 window on fs / maximize as tiled + visible
+    // because the windows below fs are not visible obviously but because we update fullscreen fade which sets that
+    // state later, it does it wrong
+    PWORKSPACE->updateWindows();
+    PWORKSPACE->m_space->recalculate();
     PWORKSPACE->forceReportSizesToWindows();
 
     g_pInputManager->recheckIdleInhibitorStatus();

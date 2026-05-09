@@ -1052,3 +1052,153 @@ TEST_CASE(windows) {
 
     OK(getFromSocket("/eval hl.plugin.test.check_window_rule()"));
 }
+
+TEST_CASE(cycle_nextTiled) {
+    // If the user specifically requests a tiled window, give them a tiled window
+
+    if (!spawnKitty("a")) {
+        FAIL_TEST("Could not spawn kitty of class:a");
+    }
+
+    if (!spawnKitty("b")) {
+        FAIL_TEST("Could not spawn kitty of class:b");
+    }
+
+    if (!spawnKitty("c")) {
+        FAIL_TEST("Could not spawn kitty of class:c");
+    }
+
+    if (!spawnKitty("d")) {
+        FAIL_TEST("Could not spawn kitty of class:d");
+    }
+
+    // float the class:a window
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:a'})"));
+    // float the class:c window
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:c'})"));
+    // float the class:d window
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:d'})"));
+
+    // establish focus history
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})")); // floating
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:b'})")); // tiled  <-- What we want to focus on
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:c'})")); // floating
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:d'})")); // floating
+
+    // request a tiled window
+    OK(getFromSocket("/dispatch hl.dsp.window.cycle_next({ next = true, tiled = true, floating = false})"));
+
+    ASSERT_CONTAINS(getFromSocket("/activewindow"), "class: b");
+}
+
+TEST_CASE(cycle_nextFloating) {
+    // If the user specifically requests a floating window, give them a floating window
+
+    if (!spawnKitty("a")) {
+        FAIL_TEST("Could not spawn kitty of class:a");
+    }
+
+    if (!spawnKitty("b")) {
+        FAIL_TEST("Could not spawn kitty of class:b");
+    }
+
+    if (!spawnKitty("c")) {
+        FAIL_TEST("Could not spawn kitty of class:c");
+    }
+
+    if (!spawnKitty("d")) {
+        FAIL_TEST("Could not spawn kitty of class:d");
+    }
+
+    // float the class:b window
+    OK(getFromSocket("/dispatch hl.dsp.window.float({action = 'enable', window = 'class:b'})"));
+
+    // establish focus history
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:a'})")); // tiled
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:b'})")); // floating  <-- What we want to focus on
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:c'})")); // tiled
+    OK(getFromSocket("/dispatch hl.dsp.focus({window = 'class:d'})")); // tiled
+
+    // request a floating window
+    OK(getFromSocket("/dispatch hl.dsp.window.cycle_next({ next = true, tiled = false, floating = true})"));
+
+    ASSERT_CONTAINS(getFromSocket("/activewindow"), "class: b");
+}
+
+TEST_CASE(discussion14233) {
+    // toggling fullscreen should not mess up workspace state on a 2 window workspace
+    // with smart gaps
+
+    OK(getFromSocket(R"#(/eval hl.workspace_rule({ workspace = "w[tv1]", gaps_out = 0, gaps_in = 0 })
+hl.workspace_rule({ workspace = "f[1]",   gaps_out = 0, gaps_in = 0 })
+hl.window_rule({
+    name  = "no-gaps-wtv1",
+    match = { float = false, workspace = "w[tv1]" },
+    border_size = 0,
+    rounding    = 0,
+})
+hl.window_rule({
+    name  = "no-gaps-f1",
+    match = { float = false, workspace = "f[1]" },
+    border_size = 0,
+    rounding    = 0,
+})
+)#"));
+
+    ASSERT(!!Tests::spawnKitty(), true);
+
+    // just make sure smart gaps work
+    {
+        auto str = getFromSocket("/clients");
+        ASSERT_CONTAINS(str, "size: 1920,1080");
+        ASSERT_CONTAINS(str, "at: 0,0");
+    }
+
+    ASSERT(!!Tests::spawnKitty(), true);
+
+    {
+        auto str = getFromSocket("/clients");
+        ASSERT_COUNT_STRING(str, "size: 931,1036", 2);
+        ASSERT_CONTAINS(str, "at: 22,22");
+        ASSERT_CONTAINS(str, "at: 967,22");
+    }
+
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen()"));
+    OK(getFromSocket("/dispatch hl.dsp.window.fullscreen()"));
+
+    {
+        auto str = getFromSocket("/clients");
+        ASSERT_COUNT_STRING(str, "size: 931,1036", 2);
+        ASSERT_CONTAINS(str, "at: 22,22");
+        ASSERT_CONTAINS(str, "at: 967,22");
+    }
+}
+
+TEST_CASE(execRulesWorkspaceOverride) {
+    OK(getFromSocket("/eval hl.window_rule({ match = { class = 'kitty_exec_override' }, workspace = '2' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.exec_cmd('[workspace 3] kitty --class kitty_exec_override')"));
+
+    Tests::waitUntilWindowsN(1);
+
+    auto str = getFromSocket("/activewindow");
+    EXPECT_CONTAINS(str, "class: kitty_exec_override");
+    EXPECT_CONTAINS(str, "workspace: 3");
+
+    Tests::killAllWindows();
+}
+
+TEST_CASE(execRulesTagMutation) {
+    OK(getFromSocket("/eval hl.window_rule({ match = { class = 'kitty_tag_mutate' }, workspace = '2' })"));
+    OK(getFromSocket("/eval hl.window_rule({ match = { class = 'kitty_tag_mutate' }, tag = 'test_tag' })"));
+
+    OK(getFromSocket("/dispatch hl.dsp.exec_cmd('[workspace 3] kitty --class kitty_tag_mutate')"));
+
+    Tests::waitUntilWindowsN(1);
+
+    auto str = getFromSocket("/activewindow");
+    EXPECT_CONTAINS(str, "class: kitty_tag_mutate");
+    EXPECT_CONTAINS(str, "workspace: 3");
+
+    Tests::killAllWindows();
+}
