@@ -361,6 +361,25 @@ std::vector<SP<IValue>> Values::getConfigValues() {
                  {.validator = vec2Range(0, 0, 500, 500), .refresh = Supplementary::REFRESH_INPUT_DEVICES}),
 
         /*
+         * input:tablettool:
+         */
+
+        MS<Int>("input:tablettool:eraser_button_mode",
+                "Change the eraser button behavior on the tool. When set to 0, use the default hardware behavior of the tool. "
+                "When set to 1, the eraser button on the tool sends a button event instead.",
+                0, {.min = 0, .max = 6, .refresh = Supplementary::REFRESH_INPUT_DEVICES}),
+        MS<Int>("input:tablettool:eraser_button_override",
+                "Set a button to be button event when eraser_button_mode is set to 1. Has to be an int, cannot be a string. Must be a valid button (e.g. BTN_STYLUS) "
+                "excluding fake buttons (e.g. BTN_TOOL_*) and keys (KEY_*). Check wev if you have any doubts regarding the ID. 0 means default.",
+                0, {.min = 0, .refresh = Supplementary::REFRESH_INPUT_DEVICES}),
+        MS<Float>("input:tablettool:pressure_range_min",
+                  "Set the minimum pressure range for the tool, a negative number will set the default minimum pressure value. This is usually 0.0", -1.0,
+                  {.min = -1.0, .max = 1.0, .refresh = Supplementary::REFRESH_INPUT_DEVICES}),
+        MS<Float>("input:tablettool:pressure_range_max",
+                  "Set the maximum pressure range for the tool, a negative number will set the default maximum pressure value. This is usually 1.0", -1.0,
+                  {.min = -1.0, .max = 1.0, .refresh = Supplementary::REFRESH_INPUT_DEVICES}),
+
+        /*
          * gestures:
          */
 
@@ -548,7 +567,7 @@ std::vector<SP<IValue>> Values::getConfigValues() {
          */
 
         MS<Bool>("cursor:invisible", "don't render cursors", false),
-        MS<Int>("cursor:no_hardware_cursors", "disables hardware cursors.", 0, {.min = 0, .max = 2, .map = OptionMap{{"Disabled", 0}, {"Enabled", 1}, {"Auto", 2}}}),
+        MS<Int>("cursor:no_hardware_cursors", "disables hardware cursors.", 2, {.min = 0, .max = 2, .map = OptionMap{{"Disabled", 0}, {"Enabled", 1}, {"Auto", 2}}}),
         MS<Int>("cursor:no_break_fs_vrr", "disables scheduling new frames on cursor movement for fullscreen apps with VRR enabled.", 2,
                 {.min = 0, .max = 2, .map = OptionMap{{"disable", 0}, {"enable", 1}, {"auto", 2}}}),
         MS<Int>("cursor:min_refresh_rate", "minimum refresh rate for cursor movement when no_break_fs_vrr is active.", 24, {.min = 10, .max = 500}),

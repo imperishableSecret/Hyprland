@@ -116,6 +116,7 @@ class CInputManager {
     void               unconstrainMouse();
     bool               isConstrained();
     bool               isLocked();
+    bool               hasHeldButtons();
 
     Vector2D           getMouseCoordsInternal();
     void               refocus(std::optional<Vector2D> overridePos = std::nullopt);
@@ -127,6 +128,7 @@ class CInputManager {
     void               setPointerConfigs();
     void               setTouchDeviceConfigs(SP<ITouch> dev = nullptr);
     void               setTabletConfigs();
+    void               setTabletToolConfigs();
 
     void               updateCapabilities();
     void               updateKeyboardsLeds(SP<IKeyboard>);

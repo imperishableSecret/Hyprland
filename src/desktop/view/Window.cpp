@@ -741,8 +741,10 @@ void CWindow::setInputBlocked(eWindowInputBlockReason reason, bool blocked) {
     else
         m_inputBlockReasons &= ~MASK;
 
-    if (blocked && Desktop::focusState()->window() == m_self)
-        Desktop::focusState()->window().reset();
+    const auto IS_BLOCKED = isInputBlocked();
+
+    if (IS_BLOCKED && Desktop::focusState()->window() == m_self)
+        Desktop::focusState()->fullWindowFocus(nullptr, eFocusReason::FOCUS_REASON_SWITCH_TO_WINDOW_SOFT);
 }
 
 bool CWindow::isInputBlocked() const {
@@ -1833,6 +1835,8 @@ void CWindow::mapWindow() {
     std::string requestedWorkspace = "";
     bool        workspaceSilent    = false;
 
+    bool        monitorSilent = false;
+
     if (*PINITIALWSTRACKING) {
         const auto WINDOWENV = getEnv();
         if (WINDOWENV.contains("HL_INITIAL_WORKSPACE_TOKEN")) {
@@ -1893,17 +1897,20 @@ void CWindow::mapWindow() {
             if (MONITORSTR == "unset")
                 m_monitor = PMONITOR;
             else {
-                const auto MONITOR = g_pCompositor->getMonitorFromString(MONITORSTR);
+                const auto ARGPOS  = MONITORSTR.find_last_of(' ');
+                monitorSilent      = ARGPOS != std::string::npos && MONITORSTR.substr(ARGPOS).contains("silent");
+                const auto MONITOR = g_pCompositor->getMonitorFromString(MONITORSTR.substr(0, ARGPOS));
 
                 if (MONITOR) {
                     m_monitor = MONITOR;
 
                     const auto PMONITORFROMID = m_monitor.lock();
 
-                    if (m_monitor != PMONITOR) { // NOLINTNEXTLINE
+                    if (m_monitor != PMONITOR && !monitorSilent) // NOLINTNEXTLINE
                         Config::Actions::focusMonitor(PMONITORFROMID);
-                        PMONITOR = PMONITORFROMID;
-                    }
+
+                    PMONITOR = PMONITORFROMID;
+
                     m_workspace = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
                     PWORKSPACE  = m_workspace;
 
@@ -2173,16 +2180,19 @@ void CWindow::mapWindow() {
     }
 
     if (!m_ruleApplicator->noFocus().valueOrDefault() && !m_noInitialFocus && (!isX11OverrideRedirect() || (m_isX11 && m_xwaylandSurface->wantsFocus())) && !workspaceSilent &&
-        (!PFORCEFOCUS || PFORCEFOCUS == m_self.lock()) && !g_pInputManager->isConstrained()) {
+        !monitorSilent && (!PFORCEFOCUS || PFORCEFOCUS == m_self.lock()) && !g_pInputManager->isConstrained()) {
 
-        // this window should gain focus: if it's grouped, preserve fullscreen state.
-        const bool SAME_GROUP = m_group && m_group->has(LAST_FOCUS_WINDOW);
+        // don't steal pointer focus with X11 when buttons are held (e.g., during drags)
+        if (!m_isX11 || !g_pInputManager->hasHeldButtons()) {
+            // this window should gain focus: if it's grouped, preserve fullscreen state.
+            const bool SAME_GROUP = m_group && m_group->has(LAST_FOCUS_WINDOW);
 
-        if (IS_LAST_IN_FS && SAME_GROUP) {
-            Desktop::focusState()->rawWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
-            g_pCompositor->setWindowFullscreenInternal(m_self.lock(), LAST_FS_MODE);
-        } else
-            Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
+            if (IS_LAST_IN_FS && SAME_GROUP) {
+                Desktop::focusState()->rawWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
+                g_pCompositor->setWindowFullscreenInternal(m_self.lock(), LAST_FS_MODE);
+            } else
+                Desktop::focusState()->fullWindowFocus(m_self.lock(), FOCUS_REASON_NEW_WINDOW);
+        }
 
         alpha(WINDOW_ALPHA_ACTIVE)->setValueAndWarp(*PACTIVEALPHA);
         m_dimPercent->setValueAndWarp(m_ruleApplicator->noDim().valueOrDefault() ? 0.f : *PDIMSTRENGTH);
