@@ -74,9 +74,8 @@ void CMonitorFrameScheduler::onPresented() {
 
         g_pHyprRenderer->commitPendingAndDoExplicitSync(ml); // commit the pending frame. If it didn't fire yet (is not rendered) it doesn't matter. Syncs will wait.
 
-        // schedule a frame: we might have some missed damage, which got cleared due to the above commit.
-        // TODO: this is not always necessary, but doesn't hurt in general. We likely won't hit this if nothing's happening anyways.
-        if (ml->m_damage.hasChanged())
+        // Schedule a frame only if damage arrived after the current frame consumed the damage ring.
+        if (ml->m_damage.lastDamageTime() > ml->m_damage.lastRotationTime())
             ml->scheduleFrame();
     });
 }

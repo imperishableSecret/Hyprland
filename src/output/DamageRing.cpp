@@ -70,6 +70,7 @@ bool CDamageRing::damage(const CRegion& rg) {
         return false;
 
     m_current.add(clipped);
+    m_lastDamageTime = hrc::now();
     return true;
 }
 
@@ -82,6 +83,7 @@ void CDamageRing::rotate() {
 
     m_previous[m_previousIdx] = m_current;
     m_current.clear();
+    m_lastRotationTime = hrc::now();
 }
 
 CRegion CDamageRing::getBufferDamage(int age) {
@@ -109,4 +111,12 @@ CRegion CDamageRing::getBufferDamage(int age) {
 
 bool CDamageRing::hasChanged() {
     return !m_current.empty();
+}
+
+CDamageRing::hrc::time_point CDamageRing::lastDamageTime() const {
+    return m_lastDamageTime;
+}
+
+CDamageRing::hrc::time_point CDamageRing::lastRotationTime() const {
+    return m_lastRotationTime;
 }

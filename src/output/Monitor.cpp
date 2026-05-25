@@ -1134,7 +1134,7 @@ void CMonitor::scheduleFrame(Aquamarine::IOutput::scheduleFrameReason reason) {
         return;
 
     if (m_renderingActive)
-        m_pendingFrame = true;
+        m_pendingFrameReasons |= (1 << reason);
 
     m_output->scheduleFrame(reason);
 }
