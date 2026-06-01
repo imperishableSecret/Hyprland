@@ -2710,6 +2710,9 @@ bool CMonitorState::commit() {
 
     ensureBufferPresent();
 
+    if (m_owner->m_output->state->state().committed == 0)
+        return true;
+
     bool ret = m_owner->m_output->commit();
     return ret;
 }
