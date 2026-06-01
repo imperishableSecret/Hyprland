@@ -128,7 +128,7 @@ void CToplevelExportFrame::shareFrame(wl_resource* buffer, bool ignoreDamage) {
     if (ignoreDamage)
         g_pHyprRenderer->damageMonitor(m_session->monitor());
 
-    auto error = m_frame->share(PBUFFER, {}, [this, ignoreDamage, self = m_self](eScreenshareResult result) {
+    auto error = m_frame->share(PBUFFER, {}, ignoreDamage, [this, ignoreDamage, self = m_self](eScreenshareResult result) {
         if (self.expired() || !good())
             return;
         switch (result) {

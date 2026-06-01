@@ -160,10 +160,11 @@ namespace Screenshare {
         ~CScreenshareFrame();
 
         bool                done() const;
-        eScreenshareError   share(SP<IHLBuffer> buffer, const CRegion& damage, FScreenshareCallback callback);
+        eScreenshareError   share(SP<IHLBuffer> buffer, const CRegion& damage, bool forceFullDamage, FScreenshareCallback callback);
 
         Vector2D            bufferSize() const;
         wl_output_transform transform() const; // returns the transform applied by compositor on the buffer
+        CRegion             damageForNextCapture(bool forceFullDamage) const;
         const CRegion&      damage() const;
 
       private:

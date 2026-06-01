@@ -69,7 +69,7 @@ bool CScreenshareFrame::done() const {
     return false;
 }
 
-eScreenshareError CScreenshareFrame::share(SP<IHLBuffer> buffer, const CRegion& clientDamage, FScreenshareCallback callback) {
+eScreenshareError CScreenshareFrame::share(SP<IHLBuffer> buffer, const CRegion& clientDamage, bool forceFullDamage, FScreenshareCallback callback) {
     if UNLIKELY (done())
         return ERROR_STOPPED;
 
@@ -128,18 +128,31 @@ eScreenshareError CScreenshareFrame::share(SP<IHLBuffer> buffer, const CRegion& 
         g_pHyprRenderer->damageMonitor(PMONITOR);
     }
 
-    // TODO: add a damage ring for output damage since last shared frame
-    CRegion frameDamage = CRegion(0, 0, m_bufferSize.x, m_bufferSize.y);
-
-    // copy everything on the first frame
-    if (m_isFirst)
-        m_damage = CRegion(0, 0, m_bufferSize.x, m_bufferSize.y);
-    else
-        m_damage = frameDamage.add(clientDamage);
+    m_damage = damageForNextCapture(forceFullDamage).add(clientDamage);
 
     m_damage.intersect(0, 0, m_bufferSize.x, m_bufferSize.y);
 
     return ERROR_NONE;
+}
+
+CRegion CScreenshareFrame::damageForNextCapture(bool forceFullDamage) const {
+    const CRegion fullDamage = CRegion{0, 0, m_bufferSize.x, m_bufferSize.y};
+
+    if (m_session.expired())
+        return fullDamage;
+
+    if (m_isFirst || forceFullDamage || m_overlayCursor || m_session->m_type != SHARE_MONITOR)
+        return fullDamage;
+
+    const auto PMONITOR = m_session->monitor();
+    if (!PMONITOR)
+        return fullDamage;
+
+    auto damage = PMONITOR->resources()->pendingMirrorFBDamage();
+    damage.transform(Math::wlTransformToHyprutils(Math::invertTransform(PMONITOR->m_transform)), PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y);
+    damage.intersect(0, 0, m_bufferSize.x, m_bufferSize.y);
+
+    return damage;
 }
 
 void CScreenshareFrame::copy() {

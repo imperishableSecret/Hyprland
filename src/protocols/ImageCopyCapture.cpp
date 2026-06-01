@@ -392,7 +392,7 @@ CImageCopyCaptureFrame::CImageCopyCaptureFrame(SP<CExtImageCopyCaptureFrameV1> r
             return;
         }
 
-        auto error = m_frame->share(m_buffer, m_clientDamage, [this](eScreenshareResult result) {
+        auto error = m_frame->share(m_buffer, m_clientDamage, false, [this](eScreenshareResult result) {
             switch (result) {
                 case RESULT_COPIED: m_resource->sendReady(); break;
                 case RESULT_NOT_COPIED: m_resource->sendFailed(EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN); break;
@@ -417,8 +417,7 @@ CImageCopyCaptureFrame::CImageCopyCaptureFrame(SP<CExtImageCopyCaptureFrameV1> r
 
     m_clientDamage.clear();
 
-    // TODO: see ScreenshareFrame::share() for "add a damage ring for output damage since last shared frame"
-    m_resource->sendDamage(0, 0, m_session->m_bufferSize.x, m_session->m_bufferSize.y);
+    m_frame->damageForNextCapture(false).forEachRect([this](const auto& rect) { m_resource->sendDamage(rect.x1, rect.y1, rect.x2 - rect.x1, rect.y2 - rect.y1); });
 
     m_resource->sendTransform(m_frame->transform());
 }
