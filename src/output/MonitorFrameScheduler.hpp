@@ -4,6 +4,7 @@
 #include "../render/SyncFDManager.hpp"
 
 #include <chrono>
+#include <cstdint>
 
 namespace Monitor {
     class CMonitorFrameScheduler {
@@ -26,8 +27,10 @@ namespace Monitor {
         void                       onFinishRender();
         bool                       newSchedulingEnabled();
 
-        bool                       m_renderAtFrame = true;
-        bool                       m_pendingThird  = false;
+        bool                       m_renderAtFrame          = true;
+        bool                       m_pendingThird           = false;
+        uint64_t                   m_renderGeneration       = 0;
+        uint64_t                   m_pendingThirdGeneration = 0;
         hrc::time_point            m_lastRenderBegun;
 
         PHLMONITORREF              m_monitor;

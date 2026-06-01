@@ -38,7 +38,8 @@ void CMonitorFrameScheduler::onSyncFired() {
     m_pendingThird  = true;
     m_renderAtFrame = false; // block frame rendering, we already scheduled
 
-    m_lastRenderBegun = hrc::now();
+    m_lastRenderBegun        = hrc::now();
+    m_pendingThirdGeneration = ++m_renderGeneration;
 
     // get a ref to ourselves. renderMonitor can destroy this scheduler if it decides to perform a monitor reload
     // FIXME: this is horrible. "renderMonitor" should not be able to do that.
@@ -62,15 +63,23 @@ void CMonitorFrameScheduler::onPresented() {
 
     Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> onPresented, missed, committing pending.", PMONITOR->m_name);
 
-    m_pendingThird = false;
+    const auto COMMITGENERATION = m_pendingThirdGeneration;
 
     Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> onPresented, missed, committing pending at the earliest convenience.", PMONITOR->m_name);
 
-    g_pEventLoopManager->doLater([m = PHLMONITORREF{PMONITOR}] {
+    m_pendingThird = false;
+
+    g_pEventLoopManager->doLater([m = PHLMONITORREF{PMONITOR}, scheduler = m_self, commitGeneration = COMMITGENERATION] {
         if (!m || !m->m_output)
             return;
 
         auto ml = m.lock();
+
+        const auto SCHEDULER = scheduler.lock();
+        if (!SCHEDULER || SCHEDULER->m_renderGeneration != commitGeneration || !SCHEDULER->newSchedulingEnabled()) {
+            Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> skipping stale pending commit.", ml->m_name);
+            return;
+        }
 
         g_pHyprRenderer->commitPendingAndDoExplicitSync(ml); // commit the pending frame. If it didn't fire yet (is not rendered) it doesn't matter. Syncs will wait.
 
@@ -111,6 +120,7 @@ void CMonitorFrameScheduler::onFrame() {
     Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> frame event, render = true, rendering normally.", PMONITOR->m_name);
 
     m_lastRenderBegun = hrc::now();
+    ++m_renderGeneration;
 
     // get a ref to ourselves. renderMonitor can destroy this scheduler if it decides to perform a monitor reload
     // FIXME: this is horrible. "renderMonitor" should not be able to do that.
