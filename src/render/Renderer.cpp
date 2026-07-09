@@ -884,7 +884,7 @@ bool IHyprRenderer::preBlurQueued(PHLMONITORREF pMonitor) {
 
     if (!pMonitor)
         return false;
-    return m_renderData.pMonitor->m_blurFBDirty && *PBLURNEWOPTIMIZE && *PBLUR && m_renderData.pMonitor->m_blurFBShouldRender;
+    return pMonitor->m_blurFBDirty && *PBLURNEWOPTIMIZE && *PBLUR && pMonitor->m_blurFBShouldRender;
 }
 
 void IHyprRenderer::pushMonitorTransformEnabled(bool enabled) {

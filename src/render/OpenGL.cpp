@@ -9,6 +9,7 @@
 #include <random>
 #include <pango/pangocairo.h>
 #include "OpenGL.hpp"
+#include "PreblurDecision.hpp"
 #include "Renderer.hpp"
 #include "../Compositor.hpp"
 #include "../helpers/MiscFunctions.hpp"
@@ -1975,20 +1976,12 @@ void CHyprOpenGLImpl::preRender(PHLMONITOR pMonitor) {
         }
     }
 
-    for (auto const& m : State::monitorState()->monitors()) {
-        for (auto const& lsl : m->m_layerSurfaceLayers) {
-            for (auto const& ls : lsl) {
-                if (!ls->m_layerSurface || ls->m_ruleApplicator->xray().valueOrDefault() != 1)
-                    continue;
-
-                // if (ls->layerSurface->surface->opaque && ls->alpha->value() >= 1.f)
-                //     continue;
-
-                hasWindows = true;
-                break;
-            }
-        }
-    }
+    if (!hasWindows)
+        hasWindows = std::ranges::any_of(pMonitor->m_layerSurfaceLayers, [pMonitor](const auto& layer) {
+            return std::ranges::any_of(layer, [pMonitor](const auto& ls) {
+                return Render::layerNeedsPreblur(ls->m_monitor == pMonitor, !!ls->m_layerSurface, ls->m_ruleApplicator->xray().valueOrDefault());
+            });
+        });
 
     if (!hasWindows)
         return;
