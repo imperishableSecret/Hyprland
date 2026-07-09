@@ -244,6 +244,7 @@ namespace Render {
         virtual bool initRenderBuffer(SP<Aquamarine::IBuffer> buffer, uint32_t fmt) {
             return false;
         };
+        virtual void         resetRenderBuffer() {};
 
         SP<ITexture>         getBackground(PHLMONITOR pMonitor);
         virtual SP<ITexture> getBlurTexture(PHLMONITORREF pMonitor);
