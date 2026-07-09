@@ -2124,13 +2124,23 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
 
     surface->presentFeedback(Time::steadyNow(), m_self.lock());
 
-    const bool cursorCommitDue = m_scanoutNeedsCursorUpdate && !shouldSuppressCursorCommit();
-    const bool vrrKeepaliveDue = isVrrKeepaliveDue();
+    const bool cursorCommitDue      = m_scanoutNeedsCursorUpdate && !shouldSuppressCursorCommit();
+    const bool vrrKeepaliveDue      = isVrrKeepaliveDue();
+    const bool outputStateCommitDue = m_output->state->state().committed != 0;
 
-    if (cursorCommitDue || vrrKeepaliveDue) {
+    if (cursorCommitDue || vrrKeepaliveDue || outputStateCommitDue) {
         m_output->state->setBuffer(buffer);
-        if (!m_state.test() || !m_output->commit()) {
-            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursorCommitDue: {}, vrrKeepaliveDue: {}", cursorCommitDue, vrrKeepaliveDue);
+        if (!m_state.test()) {
+            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursorCommitDue: {}, vrrKeepaliveDue: {}, outputStateCommitDue: {}", cursorCommitDue,
+                             vrrKeepaliveDue, outputStateCommitDue);
+            m_lastScanout.reset();
+            return false;
+        }
+
+        const bool committed = m_output->commit();
+        if (!committed) {
+            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursorCommitDue: {}, vrrKeepaliveDue: {}, outputStateCommitDue: {}", cursorCommitDue,
+                             vrrKeepaliveDue, outputStateCommitDue);
             m_lastScanout.reset();
             return false;
         }
