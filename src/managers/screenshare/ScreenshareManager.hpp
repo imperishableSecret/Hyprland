@@ -216,7 +216,11 @@ namespace Screenshare {
             uint32_t pendingRegionFrames  = 0;
 
             bool     needsCopyFB() const {
-                return pendingFrames > 0;
+                return pendingMonitorFrames > 0 || pendingRegionFrames > 0;
+            }
+
+            bool blocksDirectScanout() const {
+                return sharingSessions > 0 || pendingFrames > 0;
             }
         };
 
@@ -232,6 +236,7 @@ namespace Screenshare {
 
         void                    onOutputCommit(PHLMONITOR monitor);
         bool                    isOutputBeingSSd(PHLMONITOR monitor);
+        bool                    outputBlocksDirectScanout(PHLMONITOR monitor);
         bool                    outputNeedsCopyFB(PHLMONITOR monitor);
         SOutputCopyFBState      outputCopyFBState(PHLMONITOR monitor);
 

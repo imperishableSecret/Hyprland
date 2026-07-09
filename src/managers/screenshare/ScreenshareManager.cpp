@@ -13,17 +13,10 @@ CScreenshareManager::CScreenshareManager() {
 
 void CScreenshareManager::onOutputCommit(PHLMONITOR monitor) {
     std::erase_if(m_sessions, [&](const WP<CScreenshareSession>& session) { return session.expired(); });
+    std::erase_if(m_pendingFrames, [&](const WP<CScreenshareFrame>& frame) { return frame.expired(); });
 
-    // if no pending frames, and no sessions are sharing, then unblock ds
-    if (m_pendingFrames.empty()) {
-        for (const auto& session : m_sessions) {
-            if (!session->m_stopped && session->m_sharing)
-                return;
-        }
-
-        g_pHyprRenderer->m_directScanoutBlocked = false;
+    if (m_pendingFrames.empty())
         return; // nothing to share
-    }
 
     std::ranges::for_each(m_pendingFrames, [&](WP<CScreenshareFrame>& frame) {
         if (frame.expired() || !frame->m_shared || frame->done())
@@ -163,6 +156,10 @@ bool CScreenshareManager::isOutputBeingSSd(PHLMONITOR monitor) {
     });
 }
 
+bool CScreenshareManager::outputBlocksDirectScanout(PHLMONITOR monitor) {
+    return outputCopyFBState(monitor).blocksDirectScanout();
+}
+
 bool CScreenshareManager::outputNeedsCopyFB(PHLMONITOR monitor) {
     return outputCopyFBState(monitor).needsCopyFB();
 }
@@ -171,7 +168,7 @@ CScreenshareManager::SOutputCopyFBState CScreenshareManager::outputCopyFBState(P
     SOutputCopyFBState state;
 
     for (const auto& session : m_sessions) {
-        if (!session || !session->isActive() || (session->m_type != SHARE_MONITOR && session->m_type != SHARE_REGION) || session->m_monitor != monitor)
+        if (!session || !session->isActive() || session->monitor() != monitor)
             continue;
 
         state.activeSessions++;
@@ -185,16 +182,17 @@ CScreenshareManager::SOutputCopyFBState CScreenshareManager::outputCopyFBState(P
     }
 
     for (const auto& frame : m_pendingFrames) {
-        if (!frame || frame->done() || !frame->m_shared || frame->m_session->monitor() != monitor)
+        if (!frame || frame->done() || frame->m_session->monitor() != monitor)
             continue;
 
-        if (frame->m_session->m_type == SHARE_MONITOR) {
-            state.pendingFrames++;
+        state.pendingFrames++;
+        if (!frame->m_shared)
+            continue;
+
+        if (frame->m_session->m_type == SHARE_MONITOR)
             state.pendingMonitorFrames++;
-        } else if (frame->m_session->m_type == SHARE_REGION) {
-            state.pendingFrames++;
+        else if (frame->m_session->m_type == SHARE_REGION)
             state.pendingRegionFrames++;
-        }
     }
 
     return state;

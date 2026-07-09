@@ -10,6 +10,7 @@
 #include "../pointer/cursor/CursorManager.hpp"
 #include "../pointer/PointerManager.hpp"
 #include "../managers/input/InputManager.hpp"
+#include "../managers/screenshare/ScreenshareManager.hpp"
 #include "../animation/AnimationManager.hpp"
 #include "../managers/fullscreen/FullscreenController.hpp"
 #include "../desktop/view/Window.hpp"
@@ -2057,6 +2058,16 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
         return {};
+
+    const auto CAPTURE_STATE = Screenshare::mgr()->outputCopyFBState(pMonitor);
+
+    m_renderData.pMonitor                  = pMonitor;
+    m_renderData.outputNeedsCopyFB         = !pMonitor->m_mirrors.empty() || CAPTURE_STATE.needsCopyFB();
+    m_renderData.outputBlocksDirectScanout = CAPTURE_STATE.blocksDirectScanout();
+    CScopeGuard outputCopyCacheGuard([this] {
+        m_renderData.outputNeedsCopyFB.reset();
+        m_renderData.outputBlocksDirectScanout.reset();
+    });
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();

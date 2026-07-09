@@ -9,6 +9,7 @@
 #include <hyprutils/math/Mat3x3.hpp>
 #include <hyprutils/math/Region.hpp>
 #include <hyprutils/math/Vector2D.hpp>
+#include <optional>
 
 namespace Render {
     const std::vector<const char*> ASSET_PATHS = {
@@ -93,6 +94,8 @@ namespace Render {
         bool                      mouseZoomUseMouse  = true; // true by default
         bool                      useNearestNeighbor = false;
         bool                      blockScreenShader  = false;
+        std::optional<bool>       outputNeedsCopyFB;
+        std::optional<bool>       outputBlocksDirectScanout;
 
         Vector2D                  primarySurfaceUVTopLeft     = Vector2D(-1, -1);
         Vector2D                  primarySurfaceUVBottomRight = Vector2D(-1, -1);

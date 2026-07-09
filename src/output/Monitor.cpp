@@ -2069,7 +2069,11 @@ uint16_t CMonitor::isDSBlocked(bool full) {
             return reasons;
     }
 
-    if (g_pHyprRenderer->m_directScanoutBlocked) {
+    const bool CAPTURE_BLOCKS_SCANOUT =
+        g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor.get() == this && g_pHyprRenderer->m_renderData.outputBlocksDirectScanout.has_value() ?
+        *g_pHyprRenderer->m_renderData.outputBlocksDirectScanout :
+        Screenshare::mgr()->outputBlocksDirectScanout(m_self.lock());
+    if (CAPTURE_BLOCKS_SCANOUT) {
         reasons |= DS_BLOCK_RECORD;
         if (!full)
             return reasons;
@@ -2784,6 +2788,9 @@ void CMonitorState::applyCustomModeWithSwapchain(const SP<Aquamarine::SOutputMod
 }
 
 bool CMonitor::needsACopyFB() {
+    if (g_pHyprRenderer && g_pHyprRenderer->m_renderData.pMonitor.get() == this && g_pHyprRenderer->m_renderData.outputNeedsCopyFB.has_value())
+        return *g_pHyprRenderer->m_renderData.outputNeedsCopyFB;
+
     return !m_mirrors.empty() || Screenshare::mgr()->outputNeedsCopyFB(m_self.lock());
 }
 
