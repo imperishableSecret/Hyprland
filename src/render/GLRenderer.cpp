@@ -85,7 +85,7 @@ bool CHyprGLRenderer::beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, 
     return true;
 }
 
-void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallback) {
+CFileDescriptor CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallback) {
     const auto  PMONITOR           = g_pHyprRenderer->m_renderData.pMonitor;
     static auto PNVIDIAANTIFLICKER = CConfigValue<Config::INTEGER>("opengl:nvidia_anti_flicker");
 
@@ -107,7 +107,7 @@ void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallba
     }
 
     if (m_renderMode == RENDER_MODE_FULL_FAKE)
-        return;
+        return {};
 
     if (m_renderMode == RENDER_MODE_NORMAL)
         PMONITOR->m_output->state->setBuffer(m_currentBuffer);
@@ -125,11 +125,15 @@ void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallba
         if (renderingDoneCallback)
             renderingDoneCallback();
 
-        return;
+        return {};
     }
 
-    auto eglSync = createSyncFDManager();
+    CFileDescriptor renderCompletionFence;
+    auto            eglSync = createSyncFDManager();
     if LIKELY (eglSync && eglSync->isValid()) {
+        if (m_renderMode == RENDER_MODE_NORMAL)
+            renderCompletionFence = eglSync->fd().duplicate();
+
         for (auto const& buf : m_usedAsyncBuffers) {
             for (const auto& releaser : buf->m_syncReleasers) {
                 releaser->addSyncFileFd(eglSync->fd());
@@ -154,10 +158,17 @@ void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallba
     } else {
         Log::logger->log(Log::ERR, "renderer: Explicit sync failed, releasing resources");
 
+        if ((isNvidia() && *PNVIDIAANTIFLICKER) || isSoftware())
+            glFinish();
+        else
+            glFlush();
+
         m_usedAsyncBuffers.clear(); // release all buffer refs and hope implicit sync works
         if (renderingDoneCallback)
             renderingDoneCallback();
     }
+
+    return renderCompletionFence;
 }
 
 void CHyprGLRenderer::renderOffToMain(SP<IFramebuffer> off) {

@@ -53,7 +53,8 @@ namespace Pointer {
 }
 
 namespace Render {
-    using CScopeGuard = Hyprutils::Utils::CScopeGuard;
+    using CScopeGuard     = Hyprutils::Utils::CScopeGuard;
+    using CFileDescriptor = Hyprutils::OS::CFileDescriptor;
 
     class IElementRenderer;
     class CRenderPass;
@@ -71,7 +72,7 @@ namespace Render {
         virtual eType                       type() = 0;
         WP<Render::GL::CHyprOpenGLImpl>     glBackend();
 
-        void                                renderMonitor(PHLMONITOR pMonitor, bool commit = true);
+        CFileDescriptor                     renderMonitor(PHLMONITOR pMonitor, bool commit = true);
         void                                arrangeLayersForMonitor(const MONITORID&);
         void                                damageSurface(SP<CWLSurfaceResource>, double, double, double scale = 1.0);
         void                                damageWindow(PHLWINDOW, bool forceFull = false);
@@ -105,7 +106,7 @@ namespace Render {
         bool                                beginFullFakeRender(PHLMONITOR pMonitor, CRegion& damage, SP<IFramebuffer> fb);
         bool                                beginRenderToBuffer(PHLMONITOR pMonitor, CRegion& damage, SP<IHLBuffer> buffer, bool simple = false);
         virtual void                        startRenderPass() {};
-        virtual void                        endRender(const std::function<void()>& renderingDoneCallback = {}) = 0;
+        virtual CFileDescriptor             endRender(const std::function<void()>& renderingDoneCallback = {}) = 0;
 
         NColorManagement::PImageDescription workBufferImageDescription();
         bool                                m_bBlockSurfaceFeedback = false;

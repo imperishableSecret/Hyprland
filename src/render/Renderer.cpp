@@ -2003,9 +2003,9 @@ void IHyprRenderer::renderMirrored() {
     addPassElement<CTexPassElement>(std::move(data));
 }
 
-void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
+CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     if (!pMonitor)
-        return;
+        return {};
     static std::chrono::high_resolution_clock::time_point renderStart        = std::chrono::high_resolution_clock::now();
     static std::chrono::high_resolution_clock::time_point renderStartOverlay = std::chrono::high_resolution_clock::now();
     static std::chrono::high_resolution_clock::time_point endRenderOverlay   = std::chrono::high_resolution_clock::now();
@@ -2022,7 +2022,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     if (pMonitor->m_pixelSize.x < 1 || pMonitor->m_pixelSize.y < 1) {
         Log::logger->log(Log::ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
-        return;
+        return {};
     }
 
     if (!*PDAMAGEBLINK)
@@ -2034,7 +2034,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     }
 
     if (!g_pCompositor->m_sessionActive)
-        return;
+        return {};
 
     Event::bus()->m_events.render.preChecks.emit(pMonitor);
 
@@ -2056,7 +2056,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     }
 
     if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
-        return;
+        return {};
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();
@@ -2073,7 +2073,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
             if (!pMonitor->m_directScanoutIsActive)
                 pMonitor->m_directScanoutIsActive = true;
-            return;
+            return {};
         } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive)
             pMonitor->handleDSleave();
 
@@ -2086,11 +2086,11 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     const auto NOW = Time::steadyNow();
 
     if (!shouldRenderMonitor(pMonitor) && damageBlinkCleanup == 0)
-        return;
+        return {};
 
     if (*PDAMAGETRACKINGMODE == -1) {
         Log::logger->log(Log::CRIT, "Damage tracking mode -1 ????");
-        return;
+        return {};
     }
 
     Event::bus()->m_events.render.stage.emit(RENDER_PRE);
@@ -2137,7 +2137,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     CRegion damage, finalDamage;
     if (!beginRender(pMonitor, damage, RENDER_MODE_NORMAL)) {
         Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
-        return;
+        return {};
     }
     renderSetupSucceeded = true;
 
@@ -2223,7 +2223,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
 
-    endRender();
+    auto renderCompletionFence = endRender();
 
     TRACY_GPU_COLLECT;
 
@@ -2278,6 +2278,8 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         } else
             Debug::overlay()->renderDataNoOverlay(pMonitor, durationUs);
     }
+
+    return renderCompletionFence;
 }
 
 static const hdr_output_metadata NO_HDR_METADATA = {.hdmi_metadata_type1 = hdr_metadata_infoframe{.eotf = 0}};

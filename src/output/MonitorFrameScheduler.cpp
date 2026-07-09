@@ -1,4 +1,5 @@
 #include "MonitorFrameScheduler.hpp"
+#include "FrameCompletionDecision.hpp"
 #include "../config/ConfigValue.hpp"
 #include "../Compositor.hpp"
 #include "../render/Renderer.hpp"
@@ -14,7 +15,7 @@ CMonitorFrameScheduler::CMonitorFrameScheduler(PHLMONITOR m) : m_monitor(m) {
 bool CMonitorFrameScheduler::newSchedulingEnabled() {
     static auto PENABLENEW = CConfigValue<Config::INTEGER>("render:new_render_scheduling");
 
-    return *PENABLENEW && g_pHyprRenderer->explicitSyncSupported() && m_monitor && !m_monitor->m_directScanoutIsActive;
+    return *PENABLENEW && !m_forceConventional && g_pHyprRenderer->explicitSyncSupported() && m_monitor && !m_monitor->m_directScanoutIsActive;
 }
 
 void CMonitorFrameScheduler::onSyncFired() {
@@ -45,12 +46,12 @@ void CMonitorFrameScheduler::onSyncFired() {
     // FIXME: this is horrible. "renderMonitor" should not be able to do that.
     auto self = m_self;
 
-    g_pHyprRenderer->renderMonitor(PMONITOR, false);
+    auto renderCompletionFence = g_pHyprRenderer->renderMonitor(PMONITOR, false);
 
     if (!self)
         return;
 
-    onFinishRender();
+    onFinishRender(std::move(renderCompletionFence));
 }
 
 void CMonitorFrameScheduler::onPresented() {
@@ -126,17 +127,38 @@ void CMonitorFrameScheduler::onFrame() {
     // FIXME: this is horrible. "renderMonitor" should not be able to do that.
     auto self = m_self;
 
-    g_pHyprRenderer->renderMonitor(PMONITOR);
+    auto renderCompletionFence = g_pHyprRenderer->renderMonitor(PMONITOR);
 
     if (!self)
         return;
 
-    onFinishRender();
+    onFinishRender(std::move(renderCompletionFence));
 }
 
-void CMonitorFrameScheduler::onFinishRender() {
-    m_sync = g_pHyprRenderer->createSyncFDManager(); // this destroys the old sync
-    g_pEventLoopManager->doOnReadable(m_sync->fd().duplicate(), [this, self = m_self] {
+void CMonitorFrameScheduler::onFinishRender(Hyprutils::OS::CFileDescriptor fence) {
+    const auto ACTION = frameCompletionAction(newSchedulingEnabled(), fence.isValid(), m_pendingThird);
+
+    if (ACTION == FRAME_COMPLETION_IGNORE) {
+        m_renderAtFrame = true;
+        m_pendingThird  = false;
+        return;
+    }
+
+    if (ACTION == FRAME_COMPLETION_FALLBACK || ACTION == FRAME_COMPLETION_FALLBACK_COMMIT_PENDING) {
+        Log::logger->log(Log::WARN, "CMonitorFrameScheduler: render completion fence unavailable, falling back to conventional scheduling");
+        m_forceConventional = true;
+        m_renderAtFrame     = true;
+
+        if (ACTION == FRAME_COMPLETION_FALLBACK_COMMIT_PENDING) {
+            m_pendingThird = false;
+            if (const auto PMONITOR = m_monitor.lock())
+                g_pHyprRenderer->commitPendingAndDoExplicitSync(PMONITOR);
+        }
+
+        return;
+    }
+
+    g_pEventLoopManager->doOnReadable(std::move(fence), [this, self = m_self] {
         if (!self) // might've gotten destroyed
             return;
         onSyncFired();
