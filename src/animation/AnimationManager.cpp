@@ -1,4 +1,5 @@
 #include "AnimationManager.hpp"
+#include "AnimationTickPacer.hpp"
 #include "../Compositor.hpp"
 #include "../desktop/DesktopTypes.hpp"
 #include "../helpers/AnimatedVariable.hpp"
@@ -160,9 +161,10 @@ static void handleUpdate(CAnimatedVariable<VarType>& av, bool warp) {
 }
 
 void CHyprAnimationManager::tick() {
-    static std::chrono::time_point lastTick = std::chrono::high_resolution_clock::now();
-    m_lastTickTimeMs                        = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - lastTick).count() / 1000.0;
-    lastTick                                = std::chrono::high_resolution_clock::now();
+    static auto lastTick = Time::steadyNow();
+    const auto  NOW      = Time::steadyNow();
+    m_lastTickTimeMs     = std::chrono::duration_cast<std::chrono::microseconds>(NOW - lastTick).count() / 1000.0;
+    lastTick             = NOW;
 
     static auto PANIMENABLED = CConfigValue<Config::INTEGER>("animations:enabled");
 
@@ -350,7 +352,8 @@ void CHyprAnimationManager::frameTick() {
     if UNLIKELY (!g_pCompositor->m_sessionActive || !std::ranges::any_of(State::monitorState()->monitors(), [](const auto& mon) { return mon->m_enabled && mon->m_output; }))
         return;
 
-    if (!m_lastTickValid || m_lastTickTimer.getMillis() >= 1.0f) {
+    const bool TICK_DUE = !m_lastTickValid || std::chrono::duration_cast<std::chrono::microseconds>(Time::steadyNow() - m_lastTickTimer.chrono()) >= tickInterval();
+    if (TICK_DUE) {
         m_lastTickTimer.reset();
         m_lastTickValid = true;
 
@@ -373,7 +376,13 @@ void CHyprAnimationManager::scheduleTick() {
         return;
     }
 
-    m_animationTimer->updateTimeout(std::chrono::milliseconds(1));
+    auto timeout = tickInterval();
+    if (m_lastTickValid) {
+        const auto ELAPSED = std::chrono::duration_cast<std::chrono::microseconds>(Time::steadyNow() - m_lastTickTimer.chrono());
+        timeout            = ELAPSED < timeout ? timeout - ELAPSED : std::chrono::microseconds{1};
+    }
+
+    m_animationTimer->updateTimeout(timeout);
 }
 
 void CHyprAnimationManager::onTicked() {
@@ -383,6 +392,14 @@ void CHyprAnimationManager::onTicked() {
 void CHyprAnimationManager::resetTickState() {
     m_lastTickValid = false;
     m_tickScheduled = false;
+}
+
+std::chrono::microseconds CHyprAnimationManager::tickInterval() const {
+    CAnimationTickPacer pacer;
+    for (const auto& monitor : State::monitorState()->monitors())
+        pacer.considerOutput(monitor->m_refreshRate, monitor->m_enabled && monitor->m_output);
+
+    return pacer.interval();
 }
 
 std::string CHyprAnimationManager::styleValidInConfigVar(const std::string& config, const std::string& style) {

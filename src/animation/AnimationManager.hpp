@@ -57,9 +57,11 @@ namespace Animation {
         float               m_lastTickTimeMs;
 
       private:
-        bool   m_tickScheduled = false;
-        bool   m_lastTickValid = false;
-        CTimer m_lastTickTimer;
+        bool                      m_tickScheduled = false;
+        bool                      m_lastTickValid = false;
+        CTimer                    m_lastTickTimer;
+
+        std::chrono::microseconds tickInterval() const;
     };
 
     UP<CHyprAnimationManager>& mgr();
