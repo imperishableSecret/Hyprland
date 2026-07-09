@@ -124,10 +124,7 @@ void CScreencopyFrame::shareFrame(CZwlrScreencopyFrameV1* pFrame, wl_resource* b
 
     const auto& PBUFFER = PBUFFERRES->m_buffer.lock();
 
-    if (!withDamage)
-        g_pHyprRenderer->damageMonitor(m_session->monitor());
-
-    auto error = m_frame->share(PBUFFER, {}, !withDamage, [this, withDamage, self = m_self](eScreenshareResult result) {
+    auto        error = m_frame->share(PBUFFER, {}, !withDamage, [this, withDamage, self = m_self](eScreenshareResult result) {
         if (self.expired() || !good())
             return;
         switch (result) {

@@ -45,8 +45,10 @@ TEST(MirrorDamageJournal, historyOverflowFallsBackToFullDamage) {
 
     const auto staleSnapshot = journal.damageSince(0, fullDamage);
     EXPECT_EQ(staleSnapshot.damage.copy().getExtents(), fullDamage.copy().getExtents());
+    EXPECT_TRUE(staleSnapshot.fullDamage);
 
     const auto retainedSnapshot = journal.damageSince(1, fullDamage);
+    EXPECT_FALSE(retainedSnapshot.fullDamage);
     EXPECT_FALSE(retainedSnapshot.damage.containsPoint({5, 5}));
     EXPECT_TRUE(retainedSnapshot.damage.containsPoint({25, 25}));
     EXPECT_TRUE(retainedSnapshot.damage.containsPoint({45, 45}));

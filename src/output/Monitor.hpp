@@ -276,8 +276,11 @@ namespace Monitor {
         void         addDamage(const pixman_region32_t* rg);
         void         addDamage(const CRegion& rg);
         void         addDamage(const CBox& box);
+        void         addCaptureDamage(const CRegion& rg);
         void         scheduleFrame(Aquamarine::IOutput::scheduleFrameReason reason = Aquamarine::IOutput::AQ_SCHEDULE_CLIENT_UNKNOWN);
         bool         shouldSkipScheduleFrameOnMouseEvent();
+        bool         shouldSuppressCursorCommit();
+        bool         isVrrKeepaliveDue();
         void         setMirror(const std::string&);
         bool         isMirror();
         float        getDefaultScale();

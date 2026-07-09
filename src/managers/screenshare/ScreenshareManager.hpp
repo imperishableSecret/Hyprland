@@ -78,6 +78,8 @@ namespace Screenshare {
 
         SP<Render::IFramebuffer> m_tempFB;
 
+        uint64_t                 m_consumedMirrorDamageGeneration = 0;
+
         SP<CEventLoopTimer>      m_shareStopTimer;
         bool                     m_sharing = false;
 
@@ -173,15 +175,21 @@ namespace Screenshare {
         FScreenshareCallback    m_callback;
         SP<IHLBuffer>           m_buffer;
         Vector2D                m_bufferSize = Vector2D(0, 0);
-        CRegion                 m_damage; // damage in buffer coords
+        CRegion                 m_damage;        // damage in buffer coords
+        CRegion                 m_monitorDamage; // frozen damage in monitor coords
+        uint64_t                m_damageGeneration = 0;
+        uint64_t                m_copyGeneration   = 0;
         bool                    m_shared = false, m_copied = false, m_failed = false;
         bool                    m_overlayCursor = true;
         bool                    m_isFirst       = false;
+        bool                    m_fullDamage    = false;
 
         //
         void copy();
         bool copyDmabuf();
         bool copyShm();
+        void freezeDamageSnapshot();
+        void markDamageConsumed();
 
         void render();
         void renderMonitor();

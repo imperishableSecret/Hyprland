@@ -1140,7 +1140,12 @@ void CMonitor::scheduleFrame(Aquamarine::IOutput::scheduleFrameReason reason) {
 }
 
 void CMonitor::addDamage(const pixman_region32_t* rg) {
+    if (m_resources)
+        m_resources->markMirrorSourceDamage(CRegion{rg});
+
     if (m_cursorZoom->value() != 1.f && State::monitorState()->query().vec(Pointer::mgr()->position()).run() == m_self) {
+        if (m_resources)
+            m_resources->markMirrorSourceDamage(CRegion{0, 0, m_transformedSize.x, m_transformedSize.y});
         m_damage.damageEntire();
         scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
     } else if (m_damage.damage(rg))
@@ -1152,13 +1157,26 @@ void CMonitor::addDamage(const CRegion& rg) {
 }
 
 void CMonitor::addDamage(const CBox& box) {
+    if (m_resources)
+        m_resources->markMirrorSourceDamage(CRegion{box});
+
     if (m_cursorZoom->value() != 1.f && State::monitorState()->query().vec(Pointer::mgr()->position()).run() == m_self) {
+        if (m_resources)
+            m_resources->markMirrorSourceDamage(CRegion{0, 0, m_transformedSize.x, m_transformedSize.y});
         m_damage.damageEntire();
         scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
         return;
     }
 
     if (m_damage.damage(box))
+        scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
+}
+
+void CMonitor::addCaptureDamage(const CRegion& rg) {
+    if (m_cursorZoom->value() != 1.f && State::monitorState()->query().vec(Pointer::mgr()->position()).run() == m_self) {
+        m_damage.damageEntire();
+        scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
+    } else if (m_damage.damage(rg.pixman()))
         scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
 }
 
@@ -1182,6 +1200,8 @@ bool CMonitor::shouldSkipScheduleFrameOnMouseEvent() {
     // keep requested minimum refresh rate
     if (isVrrKeepaliveDue()) {
         // damage whole screen because some previous cursor box damages were skipped
+        if (m_resources)
+            m_resources->markMirrorSourceDamage(CRegion{0, 0, m_transformedSize.x, m_transformedSize.y});
         m_damage.damageEntire();
         return false;
     }

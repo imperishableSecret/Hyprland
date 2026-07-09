@@ -96,24 +96,37 @@ void CMonitorResources::markMirrorFBStale(const CRegion& damage) {
     if (damage.empty() || !hasMirrorFB() || !m_mirrorFBValid)
         return;
 
-    m_mirrorFBStaleDamage.add(damage).intersect(CBox{{}, mirrorFBDamageSize()});
+    auto staleDamage = damage.copy().intersect(CBox{{}, mirrorFBDamageSize()});
+    m_mirrorFBStaleDamage.add(staleDamage);
+
+    auto sourceDamage = staleDamage.copy().intersect(m_mirrorSourceDamage);
+    m_mirrorDamageJournal.record(sourceDamage);
+    m_mirrorSourceDamage.subtract(staleDamage);
 }
 
 void CMonitorResources::markMirrorFBStale() {
     if (!hasMirrorFB() || !m_mirrorFBValid)
         return;
 
+    m_mirrorDamageJournal.record(m_mirrorSourceDamage);
+    m_mirrorSourceDamage.clear();
     m_mirrorFBNeedsFullRefresh = true;
     m_mirrorFBStaleDamage.clear();
 }
 
 void CMonitorResources::markMirrorFBUpdated(const CRegion& damage) {
+    auto updatedDamage = damage.copy().intersect(CBox{{}, mirrorFBDamageSize()});
+    auto sourceDamage  = updatedDamage.copy().intersect(m_mirrorSourceDamage);
+    m_mirrorDamageJournal.record(sourceDamage);
+    m_mirrorSourceDamage.subtract(updatedDamage);
+
     m_mirrorFBValid            = true;
     m_mirrorFBNeedsFullRefresh = false;
     m_mirrorFBStaleDamage.clear();
+}
 
-    auto updatedDamage = damage.copy().intersect(CBox{{}, mirrorFBDamageSize()});
-    m_mirrorDamageJournal.record(updatedDamage);
+void CMonitorResources::markMirrorSourceDamage(const CRegion& damage) {
+    m_mirrorSourceDamage.add(damage).intersect(CBox{{}, mirrorFBDamageSize()});
 }
 
 CRegion CMonitorResources::pendingMirrorFBDamage() const {
@@ -130,6 +143,13 @@ uint64_t CMonitorResources::mirrorDamageGeneration() const {
 
 SMirrorDamageSnapshot CMonitorResources::mirrorDamageSince(uint64_t generation) const {
     const auto DAMAGE_SIZE = mirrorFBDamageSize();
+    if (!hasMirrorFB() || !m_mirrorFBValid || m_mirrorFBNeedsFullRefresh)
+        return {
+            .generation = m_mirrorDamageJournal.generation(),
+            .damage     = CRegion{0, 0, DAMAGE_SIZE.x, DAMAGE_SIZE.y},
+            .fullDamage = true,
+        };
+
     return m_mirrorDamageJournal.damageSince(generation, CRegion{0, 0, DAMAGE_SIZE.x, DAMAGE_SIZE.y});
 }
 

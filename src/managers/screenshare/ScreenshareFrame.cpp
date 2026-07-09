@@ -1,4 +1,5 @@
 #include "ScreenshareManager.hpp"
+#include "ScreenshareDamage.hpp"
 #include "../../pointer/PointerManager.hpp"
 #include "../input/InputManager.hpp"
 #include "../permissions/DynamicPermissionManager.hpp"
@@ -24,7 +25,7 @@ using namespace Desktop::View;
 
 CScreenshareFrame::CScreenshareFrame(WP<CScreenshareSession> session, bool overlayCursor, bool isFirst) :
     m_session(session), m_bufferSize(m_session->bufferSize()), m_overlayCursor(overlayCursor), m_isFirst(isFirst) {
-    ;
+    freezeDamageSnapshot();
 }
 
 CScreenshareFrame::~CScreenshareFrame() {
@@ -114,21 +115,33 @@ eScreenshareError CScreenshareFrame::share(SP<IHLBuffer> buffer, const CRegion& 
     m_callback = callback;
     m_shared   = true;
 
+    if (forceFullDamage) {
+        m_fullDamage = true;
+        m_damage     = CRegion{0, 0, m_bufferSize.x, m_bufferSize.y};
+
+        if (const auto PMONITOR = m_session->monitor())
+            m_monitorDamage = CRegion{0, 0, PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y};
+    }
+
     if (m_session->m_type == SHARE_MONITOR || m_session->m_type == SHARE_REGION) {
         const auto PMONITOR = m_session->monitor();
-        if (PMONITOR)
-            PMONITOR->addDamage(PMONITOR->resources()->pendingMirrorFBDamage());
-    }
-
-    // schedule a frame so that when a screenshare starts it isn't black until the output is updated
-    if (m_isFirst) {
-        const auto PMONITOR = m_session->monitor();
-        if (PMONITOR)
+        if (PMONITOR) {
+            PMONITOR->addCaptureDamage(m_monitorDamage);
             PMONITOR->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEEDS_FRAME);
-        g_pHyprRenderer->damageMonitor(PMONITOR);
+        }
     }
 
-    m_damage = damageForNextCapture(forceFullDamage).add(clientDamage);
+    // Window shares do not use the mirror FB path above, but the first frame still
+    // needs an output commit before it can be copied.
+    if (m_isFirst && m_session->m_type == SHARE_WINDOW) {
+        const auto PMONITOR = m_session->monitor();
+        if (PMONITOR) {
+            PMONITOR->addCaptureDamage(m_monitorDamage);
+            PMONITOR->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEEDS_FRAME);
+        }
+    }
+
+    m_damage.add(clientDamage);
 
     m_damage.intersect(0, 0, m_bufferSize.x, m_bufferSize.y);
 
@@ -136,23 +149,38 @@ eScreenshareError CScreenshareFrame::share(SP<IHLBuffer> buffer, const CRegion& 
 }
 
 CRegion CScreenshareFrame::damageForNextCapture(bool forceFullDamage) const {
-    const CRegion fullDamage = CRegion{0, 0, m_bufferSize.x, m_bufferSize.y};
+    if (forceFullDamage)
+        return CRegion{0, 0, m_bufferSize.x, m_bufferSize.y};
 
-    if (m_session.expired())
-        return fullDamage;
+    return m_damage.copy();
+}
 
-    if (m_isFirst || forceFullDamage || m_overlayCursor || m_session->m_type != SHARE_MONITOR)
-        return fullDamage;
-
+void CScreenshareFrame::freezeDamageSnapshot() {
     const auto PMONITOR = m_session->monitor();
     if (!PMONITOR)
-        return fullDamage;
+        return;
 
-    auto damage = PMONITOR->resources()->pendingMirrorFBDamage();
-    damage.transform(Math::wlTransformToHyprutils(Math::invertTransform(PMONITOR->m_transform)), PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y);
-    damage.intersect(0, 0, m_bufferSize.x, m_bufferSize.y);
+    const bool                     NEEDS_FULL_DAMAGE = captureNeedsFullDamage(m_isFirst, m_overlayCursor, m_session->m_type == SHARE_MONITOR);
 
-    return damage;
+    Monitor::SMirrorDamageSnapshot snapshot;
+    if (NEEDS_FULL_DAMAGE)
+        snapshot.generation = PMONITOR->resources()->mirrorDamageGeneration();
+    else
+        snapshot = PMONITOR->resources()->mirrorDamageSince(m_session->m_consumedMirrorDamageGeneration);
+
+    auto frozen        = freezeCaptureDamage(std::move(snapshot), m_bufferSize, PMONITOR->m_transformedSize, PMONITOR->m_transform, NEEDS_FULL_DAMAGE);
+    m_fullDamage       = frozen.full;
+    m_damageGeneration = frozen.generation;
+    m_monitorDamage    = std::move(frozen.monitorDamage);
+    m_damage           = std::move(frozen.bufferDamage);
+}
+
+void CScreenshareFrame::markDamageConsumed() {
+    if (m_session.expired() || m_session->m_type != SHARE_MONITOR)
+        return;
+
+    const uint64_t GENERATION                   = consumedCaptureGeneration(m_fullDamage, m_damageGeneration, m_copyGeneration);
+    m_session->m_consumedMirrorDamageGeneration = std::max(m_session->m_consumedMirrorDamageGeneration, GENERATION);
 }
 
 void CScreenshareFrame::copy() {
@@ -162,6 +190,12 @@ void CScreenshareFrame::copy() {
     // tell client to send presented timestamp
     // TODO: is this right? this is right after we commit to aq, not when page flip happens..
     m_callback(RESULT_TIMESTAMP);
+
+    if (m_session->m_type == SHARE_MONITOR) {
+        const auto PMONITOR = m_session->monitor();
+        if (PMONITOR)
+            m_copyGeneration = PMONITOR->resources()->mirrorDamageGeneration();
+    }
 
     // store a snapshot before the permission popup so we don't break screenshots
     const auto PERM = g_pDynamicPermissionManager->clientPermissionMode(m_session->m_client, PERMISSION_TYPE_SCREENCOPY);
@@ -420,6 +454,7 @@ bool CScreenshareFrame::copyDmabuf() {
             return;
 
         LOGM(Log::TRACE, "Copied frame via dma");
+        self->markDamageConsumed();
         self->m_callback(RESULT_COPIED);
         self->m_copied = true;
     });
@@ -476,6 +511,7 @@ bool CScreenshareFrame::copyShm() {
 
     if (!m_copied) {
         LOGM(Log::TRACE, "Copied frame via shm");
+        markDamageConsumed();
         m_callback(RESULT_COPIED);
         m_copied = true;
     }

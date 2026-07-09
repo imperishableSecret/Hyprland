@@ -22,6 +22,7 @@ namespace Monitor {
         void                     markMirrorFBStale(const CRegion& damage);
         void                     markMirrorFBStale();
         void                     markMirrorFBUpdated(const CRegion& damage);
+        void                     markMirrorSourceDamage(const CRegion& damage);
         CRegion                  pendingMirrorFBDamage() const;
         uint64_t                 mirrorDamageGeneration() const;
         SMirrorDamageSnapshot    mirrorDamageSince(uint64_t generation) const;
@@ -47,6 +48,7 @@ namespace Monitor {
 
         SP<Render::IFramebuffer>            m_monitorMirrorFB;
         CRegion                             m_mirrorFBStaleDamage;
+        CRegion                             m_mirrorSourceDamage;
         CMirrorDamageJournal                m_mirrorDamageJournal;
         WP<CMonitor>                        m_monitor;
         DRMFormat                           m_drmFormat;

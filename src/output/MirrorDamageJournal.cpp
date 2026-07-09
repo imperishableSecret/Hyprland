@@ -30,7 +30,8 @@ SMirrorDamageSnapshot CMirrorDamageJournal::damageSince(uint64_t generation, con
         return snapshot;
 
     if (generation > m_generation || m_history.empty() || generation + 1 < m_history.front().generation) {
-        snapshot.damage = fullDamage.copy();
+        snapshot.damage     = fullDamage.copy();
+        snapshot.fullDamage = true;
         return snapshot;
     }
 

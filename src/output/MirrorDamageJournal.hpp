@@ -12,6 +12,7 @@ namespace Monitor {
     struct SMirrorDamageSnapshot {
         uint64_t generation = 0;
         CRegion  damage;
+        bool     fullDamage = false;
     };
 
     class CMirrorDamageJournal {
