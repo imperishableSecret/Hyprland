@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Monitor.hpp"
+#include "MirrorDamageJournal.hpp"
 #include "../helpers/Format.hpp"
 #include "../helpers/time/Timer.hpp"
 #include "../render/Framebuffer.hpp"
@@ -20,8 +21,10 @@ namespace Monitor {
         void                     invalidateMirrorFB();
         void                     markMirrorFBStale(const CRegion& damage);
         void                     markMirrorFBStale();
-        void                     markMirrorFBUpdated();
+        void                     markMirrorFBUpdated(const CRegion& damage);
         CRegion                  pendingMirrorFBDamage() const;
+        uint64_t                 mirrorDamageGeneration() const;
+        SMirrorDamageSnapshot    mirrorDamageSince(uint64_t generation) const;
         void                     enableMirror();
         void                     disableMirror();
         SP<Render::IFramebuffer> mirrorFB();
@@ -44,6 +47,7 @@ namespace Monitor {
 
         SP<Render::IFramebuffer>            m_monitorMirrorFB;
         CRegion                             m_mirrorFBStaleDamage;
+        CMirrorDamageJournal                m_mirrorDamageJournal;
         WP<CMonitor>                        m_monitor;
         DRMFormat                           m_drmFormat;
         Vector2D                            m_size;

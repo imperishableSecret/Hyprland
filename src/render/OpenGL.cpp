@@ -806,7 +806,7 @@ void CHyprOpenGLImpl::end() {
         // we can't use the offloadFB for mirroring / ss, as it contains artifacts from blurring
         if UNLIKELY (g_pHyprRenderer->m_renderData.pMonitor->needsACopyFB() && !m_fakeFrame) {
             if (saveBufferForMirror(monbox))
-                g_pHyprRenderer->m_renderData.pMonitor->resources()->markMirrorFBUpdated();
+                g_pHyprRenderer->m_renderData.pMonitor->resources()->markMirrorFBUpdated(g_pHyprRenderer->m_renderData.finalDamage);
             else
                 g_pHyprRenderer->m_renderData.pMonitor->resources()->invalidateMirrorFB();
         }

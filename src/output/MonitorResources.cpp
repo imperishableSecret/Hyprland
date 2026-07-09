@@ -107,10 +107,13 @@ void CMonitorResources::markMirrorFBStale() {
     m_mirrorFBStaleDamage.clear();
 }
 
-void CMonitorResources::markMirrorFBUpdated() {
+void CMonitorResources::markMirrorFBUpdated(const CRegion& damage) {
     m_mirrorFBValid            = true;
     m_mirrorFBNeedsFullRefresh = false;
     m_mirrorFBStaleDamage.clear();
+
+    auto updatedDamage = damage.copy().intersect(CBox{{}, mirrorFBDamageSize()});
+    m_mirrorDamageJournal.record(updatedDamage);
 }
 
 CRegion CMonitorResources::pendingMirrorFBDamage() const {
@@ -119,6 +122,15 @@ CRegion CMonitorResources::pendingMirrorFBDamage() const {
         return CRegion{0, 0, DAMAGE_SIZE.x, DAMAGE_SIZE.y};
 
     return m_mirrorFBStaleDamage.copy();
+}
+
+uint64_t CMonitorResources::mirrorDamageGeneration() const {
+    return m_mirrorDamageJournal.generation();
+}
+
+SMirrorDamageSnapshot CMonitorResources::mirrorDamageSince(uint64_t generation) const {
+    const auto DAMAGE_SIZE = mirrorFBDamageSize();
+    return m_mirrorDamageJournal.damageSince(generation, CRegion{0, 0, DAMAGE_SIZE.x, DAMAGE_SIZE.y});
 }
 
 SP<Render::IFramebuffer> CMonitorResources::mirrorFB() {
