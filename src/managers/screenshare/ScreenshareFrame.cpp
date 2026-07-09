@@ -1,5 +1,6 @@
 #include "ScreenshareManager.hpp"
 #include "ScreenshareDamage.hpp"
+#include "ShmReadbackDamage.hpp"
 #include "../../pointer/PointerManager.hpp"
 #include "../input/InputManager.hpp"
 #include "../permissions/DynamicPermissionManager.hpp"
@@ -480,7 +481,9 @@ bool CScreenshareFrame::copyShm() {
     outFB->alloc(m_bufferSize.x, m_bufferSize.y, shm.format);
     outFB->setImageDescription(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
 
-    if (!g_pHyprRenderer->beginFullFakeRender(PMONITOR, m_damage, outFB)) {
+    auto READBACK_DAMAGE = coalesceShmReadbackDamage(m_damage, m_bufferSize);
+
+    if (!g_pHyprRenderer->beginFullFakeRender(PMONITOR, READBACK_DAMAGE, outFB)) {
         LOGM(Log::ERR, "Can't copy: failed to begin rendering");
         return false;
     }
@@ -492,7 +495,7 @@ bool CScreenshareFrame::copyShm() {
     g_pHyprRenderer->endRender();
 
     bool readSucceeded = true;
-    m_damage.forEachRect([&](const auto& rect) {
+    READBACK_DAMAGE.forEachRect([&](const auto& rect) {
         if (!readSucceeded)
             return;
 
