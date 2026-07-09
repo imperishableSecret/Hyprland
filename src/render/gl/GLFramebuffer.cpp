@@ -1,12 +1,16 @@
 #include "GLFramebuffer.hpp"
+#include "PixelPackLayout.hpp"
 #include "../OpenGL.hpp"
 #include "../Renderer.hpp"
 #include "macros.hpp"
 #include "../Framebuffer.hpp"
 #include <hyprgraphics/egl/Egl.hpp>
-#include <limits>
+#include <hyprutils/utils/ScopeGuard.hpp>
+#include <cstring>
+#include <vector>
 
 using namespace Hyprgraphics::Egl;
+using namespace Hyprutils::Utils;
 using namespace Render::GL;
 
 CGLFramebuffer::CGLFramebuffer() : IFramebuffer() {}
@@ -159,29 +163,18 @@ bool CGLFramebuffer::readPixels(CHLBufferReference buffer, uint32_t offsetX, uin
         return false;
     }
 
-    if (rowOffset > std::numeric_limits<size_t>::max() - rowBytes || rowOffset + rowBytes > strideBytes) {
-        LOGM(Log::ERR, "Can't copy: shm stride is too small");
-        return false;
-    }
-
-    const auto lastRow = sc<size_t>(offsetY) + sc<size_t>(readHeight) - 1;
-    if (strideBytes > 0 && lastRow > std::numeric_limits<size_t>::max() / strideBytes) {
-        LOGM(Log::ERR, "Can't copy: shm row offset overflows");
-        return false;
-    }
-
-    const auto lastRowStart = lastRow * strideBytes;
-    const auto rowEnd       = rowOffset + rowBytes;
-    if (lastRowStart > std::numeric_limits<size_t>::max() - rowEnd || lastRowStart + rowEnd > bufLen) {
-        LOGM(Log::ERR, "Can't copy: shm buffer is too small");
+    const auto layout = calculatePixelPackLayout(bufLen, strideBytes, rowOffset, rowBytes, PFORMAT->bytesPerBlock, offsetX, offsetY, readWidth, readHeight);
+    if (!layout) {
+        LOGM(Log::ERR, "Can't copy: invalid shm buffer layout");
         return false;
     }
 
     g_pHyprOpenGL->makeEGLCurrent();
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, getFBID());
-    bind();
 
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    GLint previousReadFB = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, getFBID());
+    CScopeGuard restoreReadFB([previousReadFB] { glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB); });
 
     int         glFormat = PFORMAT->glFormat;
 
@@ -202,21 +195,42 @@ bool CGLFramebuffer::readPixels(CHLBufferReference buffer, uint32_t offsetX, uin
     } else if (glFormat == GL_RGBA)
         glFormat = GL_BGRA_EXT;
 
-    // This could be optimized by using a pixel buffer object to make this async,
-    // but really clients should just use a dma buffer anyways.
-    if (rowOffset == 0 && rowBytes == strideBytes) {
-        glReadPixels(offsetX, offsetY, readWidth, readHeight, glFormat, PFORMAT->glType, pixelData + sc<size_t>(offsetY) * strideBytes);
+    GLint previousAlignment = 0, previousRowLength = 0, previousSkipPixels = 0, previousSkipRows = 0;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousAlignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &previousRowLength);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &previousSkipPixels);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &previousSkipRows);
+
+    CScopeGuard restorePixelStore([=] {
+        glPixelStorei(GL_PACK_ALIGNMENT, previousAlignment);
+        glPixelStorei(GL_PACK_ROW_LENGTH, previousRowLength);
+        glPixelStorei(GL_PACK_SKIP_PIXELS, previousSkipPixels);
+        glPixelStorei(GL_PACK_SKIP_ROWS, previousSkipRows);
+    });
+
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    // This could be made asynchronous with a pixel buffer object, but clients
+    // with latency-sensitive capture should prefer DMA-BUF.
+    if (layout->direct) {
+        glPixelStorei(GL_PACK_ROW_LENGTH, layout->rowLength);
+        glPixelStorei(GL_PACK_SKIP_PIXELS, layout->skipPixels);
+        glPixelStorei(GL_PACK_SKIP_ROWS, layout->skipRows);
+        glReadPixels(offsetX, offsetY, readWidth, readHeight, glFormat, PFORMAT->glType, pixelData);
     } else {
+        glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+
+        std::vector<uint8_t> scratch(layout->scratchBytes);
+        glReadPixels(offsetX, offsetY, readWidth, readHeight, glFormat, PFORMAT->glType, scratch.data());
+
         for (uint32_t i = 0; i < readHeight; ++i) {
-            const auto y = offsetY + i;
-            glReadPixels(offsetX, y, readWidth, 1, glFormat, PFORMAT->glType, pixelData + sc<size_t>(y) * strideBytes + rowOffset);
+            const auto SOURCE_OFFSET      = sc<size_t>(i) * layout->rowBytes;
+            const auto DESTINATION_OFFSET = layout->destinationOffset + sc<size_t>(i) * strideBytes;
+            std::memcpy(pixelData + DESTINATION_OFFSET, scratch.data() + SOURCE_OFFSET, layout->rowBytes);
         }
     }
-
-    unbind();
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     return true;
 }
 
