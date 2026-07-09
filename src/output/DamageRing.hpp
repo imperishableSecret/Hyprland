@@ -9,15 +9,15 @@ namespace Monitor {
 
     class CDamageRing {
       public:
-        using hrc = std::chrono::high_resolution_clock;
+        using hrc = std::chrono::steady_clock;
 
-        void    setSize(const Vector2D& size_);
-        bool    damage(const CBox& box);
-        bool    damage(const CRegion& rg);
-        void    damageEntire();
-        void    rotate();
-        CRegion getBufferDamage(int age);
-        bool    hasChanged();
+        void            setSize(const Vector2D& size_);
+        bool            damage(const CBox& box);
+        bool            damage(const CRegion& rg);
+        void            damageEntire();
+        void            rotate();
+        CRegion         getBufferDamage(int age);
+        bool            hasChanged();
         hrc::time_point lastDamageTime() const;
         hrc::time_point lastRotationTime() const;
 

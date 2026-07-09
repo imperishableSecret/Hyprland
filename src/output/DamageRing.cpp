@@ -4,8 +4,8 @@
 #include <vector>
 
 namespace {
-    constexpr size_t  MAX_DAMAGE_RECTS_WITHOUT_AREA_CHECK = 8;
-    constexpr size_t  MAX_SPARSE_DAMAGE_RECTS             = 32;
+    constexpr int     MAX_DAMAGE_RECTS_WITHOUT_AREA_CHECK = 8;
+    constexpr int     MAX_SPARSE_DAMAGE_RECTS             = 32;
     constexpr int64_t COALESCE_AREA_RATIO_NUMERATOR       = 3;
     constexpr int64_t COALESCE_AREA_RATIO_DENOMINATOR     = 2;
 
@@ -27,12 +27,6 @@ namespace {
     }
 
     bool shouldCoalesceDamage(const CRegion& damage, const std::vector<pixman_box32_t>& rects) {
-        if (rects.size() <= MAX_DAMAGE_RECTS_WITHOUT_AREA_CHECK)
-            return false;
-
-        if (rects.size() > MAX_SPARSE_DAMAGE_RECTS)
-            return true;
-
         const int64_t EXACT_AREA = rectsArea(rects);
         if (EXACT_AREA <= 0)
             return false;
@@ -102,6 +96,13 @@ CRegion CDamageRing::getBufferDamage(int age) {
 
     // Don't return a ludicrous amount of rects, but avoid collapsing sparse
     // damage into a much larger extents redraw.
+    const int RECT_COUNT = pixman_region32_n_rects(damage.pixman());
+    if (RECT_COUNT <= MAX_DAMAGE_RECTS_WITHOUT_AREA_CHECK)
+        return damage;
+
+    if (RECT_COUNT > MAX_SPARSE_DAMAGE_RECTS)
+        return damage.getExtents();
+
     const auto RECTS = damage.getRects();
     if (shouldCoalesceDamage(damage, RECTS))
         return damage.getExtents();

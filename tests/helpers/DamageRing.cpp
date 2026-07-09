@@ -4,6 +4,8 @@
 
 using namespace Monitor;
 
+static_assert(CDamageRing::hrc::is_steady);
+
 // --- setSize ---
 
 TEST(DamageRing, setSizeMarksDamageEntire) {
@@ -275,6 +277,20 @@ TEST(DamageRing, getBufferDamageCoalescesWhenTooManyRects) {
     EXPECT_LE(buf.getRects().size(), 1);
 }
 
+TEST(DamageRing, getBufferDamageKeepsCommonRectCount) {
+    CDamageRing ring;
+    ring.setSize({1000, 100});
+    ring.rotate();
+
+    for (int i = 0; i < 8; ++i) {
+        ring.damage(CRegion(i * 100, 0, 5, 5));
+    }
+
+    CRegion buf = ring.getBufferDamage(1);
+
+    EXPECT_EQ(buf.getRects().size(), 8u);
+}
+
 TEST(DamageRing, getBufferDamageKeepsSparseRectsOverSoftLimit) {
     CDamageRing ring;
     ring.setSize({1000, 100});
@@ -360,4 +376,18 @@ TEST(DamageRing, hasChangedFalseAfterDamageOutsideBounds) {
     CRegion outside(500, 500, 10, 10);
     ring.damage(outside);
     EXPECT_FALSE(ring.hasChanged());
+}
+
+TEST(DamageRing, timestampsFollowDamageAndRotationOrder) {
+    CDamageRing ring;
+    ring.setSize({100, 100});
+
+    const auto DAMAGE_TIME = ring.lastDamageTime();
+    ring.rotate();
+    const auto ROTATION_TIME = ring.lastRotationTime();
+
+    EXPECT_LE(DAMAGE_TIME, ROTATION_TIME);
+
+    ring.damage(CBox{0, 0, 10, 10});
+    EXPECT_LE(ROTATION_TIME, ring.lastDamageTime());
 }
