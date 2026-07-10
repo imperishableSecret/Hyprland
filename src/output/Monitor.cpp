@@ -2321,11 +2321,13 @@ bool CMonitor::attemptDirectScanout() {
     if (g_pHyprRenderer->explicitSyncSupported() && isMultiGPU()) {
         auto sync = g_pHyprRenderer->createSyncFDManager();
 
-        if (sync->fd().isValid()) {
+        if (sync && sync->isValid()) {
             m_inFence = sync->takeFd();
             m_output->state->setExplicitInFence(m_inFence.get());
-        } else
+        } else {
+            Log::logger->log(Log::WARN, "attemptDirectScanout: failed to create a multi-GPU completion fence, falling back without an explicit fence");
             m_output->state->resetExplicitFences(); // good luck.
+        }
     } else
         m_output->state->resetExplicitFences();
 
