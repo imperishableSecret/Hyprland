@@ -118,6 +118,31 @@ void CRenderPass::clear() {
     m_elementArena.release();
 }
 
+CRenderPassRequirements CRenderPass::requirements(const SRenderPassExternalRequirements& external) const {
+    CRenderPassRequirements requirements;
+    requirements.add(external);
+
+    for (const auto& data : m_passElements) {
+        auto* const ELEMENT = data.element();
+
+        if (ELEMENT->needsLiveBlur())
+            requirements.add(RPR_LIVE_BLUR);
+        if (ELEMENT->needsPrecomputeBlur() || ELEMENT->type() == EK_PRE_BLUR)
+            requirements.add(RPR_PRECOMPUTED_BLUR);
+
+        switch (ELEMENT->type()) {
+            case EK_TRANSFORMED_WINDOW: requirements.add(RPR_WINDOW_TRANSFORMER); break;
+            case EK_UNKNOWN:
+            case EK_FRAMEBUFFER:
+            case EK_TEXTURE_MATTE:
+            case EK_CUSTOM: requirements.add(RPR_BACKEND_CONSTRAINT); break;
+            default: break;
+        }
+    }
+
+    return requirements;
+}
+
 CRegion CRenderPass::render(const CRegion& damage_) {
     const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
     static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");

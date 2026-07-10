@@ -3,6 +3,7 @@
 #include "../../defines.hpp"
 #include "PassElementArena.hpp"
 #include "PassElement.hpp"
+#include "PassRequirements.hpp"
 
 class CGradientValueData;
 
@@ -15,14 +16,15 @@ namespace Render {
         explicit CRenderPass(CRenderPass& parent);
         ~CRenderPass();
 
-        bool    empty() const;
-        bool    single() const;
+        bool                    empty() const;
+        bool                    single() const;
 
-        void    add(UP<IPassElement>&& elem);
-        void    clear();
-        void    removeAllOfType(const std::string& type);
+        void                    add(UP<IPassElement>&& elem);
+        void                    clear();
+        void                    removeAllOfType(const std::string& type);
 
-        CRegion render(const CRegion& damage_);
+        CRegion                 render(const CRegion& damage_);
+        CRenderPassRequirements requirements(const SRenderPassExternalRequirements& external = {}) const;
 
       private:
         CRegion              m_damage;

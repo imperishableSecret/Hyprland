@@ -146,12 +146,13 @@ namespace Render {
         void addPassElement(Args&&... args) {
             currentPass().emplace<T>(std::forward<Args>(args)...);
         }
-        CRenderPass&    currentPass();
-        UP<CScopeGuard> redirectPass(CRenderPass* pass);
+        CRenderPass&            currentPass();
+        CRenderPassRequirements renderPassRequirements() const;
+        UP<CScopeGuard>         redirectPass(CRenderPass* pass);
 
-        SP<ITexture>    renderSplash(const std::function<SP<ITexture>(const int, const int, unsigned char* const)>& handleData, const int fontSize, const int maxWidth = 1024,
-                                     const int maxHeight = 1024);
-        CHyprColor      getConvertedColor(const CHyprColor& color);
+        SP<ITexture> renderSplash(const std::function<SP<ITexture>(const int, const int, unsigned char* const)>& handleData, const int fontSize, const int maxWidth = 1024,
+                                  const int maxHeight = 1024);
+        CHyprColor   getConvertedColor(const CHyprColor& color);
 
         virtual SP<IRenderbuffer>    getOrCreateRenderbuffer(SP<Aquamarine::IBuffer> buffer,
                                                              uint32_t                fmt); // TODO? move to protected and fix CPointerManager::renderHWCursorBuffer
@@ -245,18 +246,22 @@ namespace Render {
             return false;
         };
         virtual void resetRenderBuffer() {};
+        virtual bool hasActiveScreenShader() const {
+            return false;
+        };
 
         struct SPreparedRenderFrame {
             CRegion damage;
             bool    acquiredSwapchainBuffer = false;
         };
 
-        void                 prepareRenderPass(PHLMONITOR pMonitor, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple);
-        bool                 prepareRenderFrame(PHLMONITOR pMonitor, const CRegion& damage, SP<IHLBuffer> buffer, SPreparedRenderFrame& prepared);
-        bool                 beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPreparedRenderFrame& prepared, CRegion& damage, bool simple);
+        void                            prepareRenderPass(PHLMONITOR pMonitor, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple);
+        bool                            prepareRenderFrame(PHLMONITOR pMonitor, const CRegion& damage, SP<IHLBuffer> buffer, SPreparedRenderFrame& prepared);
+        bool                            beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPreparedRenderFrame& prepared, CRegion& damage, bool simple);
+        SRenderPassExternalRequirements renderPassExternalRequirements() const;
 
-        SP<ITexture>         getBackground(PHLMONITOR pMonitor);
-        virtual SP<ITexture> getBlurTexture(PHLMONITORREF pMonitor);
+        SP<ITexture>                    getBackground(PHLMONITOR pMonitor);
+        virtual SP<ITexture>            getBlurTexture(PHLMONITORREF pMonitor);
 
         struct SCMSettingsCacheEntry {
             uint64_t    srcDescId = 0, dstDescId = 0;

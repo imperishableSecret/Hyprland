@@ -540,6 +540,10 @@ CRenderPass& IHyprRenderer::currentPass() {
     return m_currentPass ? *m_currentPass : m_renderPass;
 }
 
+CRenderPassRequirements IHyprRenderer::renderPassRequirements() const {
+    return m_renderPass.requirements(renderPassExternalRequirements());
+}
+
 UP<CScopeGuard> IHyprRenderer::redirectPass(CRenderPass* pass) {
     const auto oldPass = m_currentPass;
     m_currentPass      = pass;
@@ -1759,6 +1763,24 @@ bool IHyprRenderer::beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPrepar
 
     damage = prepared.damage;
     return beginRenderInternal(pMonitor, damage, simple);
+}
+
+SRenderPassExternalRequirements IHyprRenderer::renderPassExternalRequirements() const {
+    const auto MONITOR = m_renderData.pMonitor;
+    if (!MONITOR)
+        return {.backendConstraint = true};
+
+    const auto WORK_DESCRIPTION   = MONITOR->workBufferImageDescription();
+    const auto OUTPUT_DESCRIPTION = MONITOR->m_imageDescription;
+
+    return {
+        .outputCopy        = MONITOR->needsACopyFB() || MONITOR->isMirror(),
+        .screenShader      = hasActiveScreenShader() && !m_renderData.blockScreenShader,
+        .colorConversion   = WORK_DESCRIPTION && OUTPUT_DESCRIPTION && WORK_DESCRIPTION->value() != OUTPUT_DESCRIPTION->value(),
+        .zoom              = m_renderData.mouseZoomFactor != 1.F,
+        .outputTransform   = MONITOR->m_transform != WL_OUTPUT_TRANSFORM_NORMAL,
+        .backendConstraint = m_renderMode != RENDER_MODE_NORMAL,
+    };
 }
 
 bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple) {

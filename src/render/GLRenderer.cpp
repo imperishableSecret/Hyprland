@@ -42,6 +42,10 @@ IHyprRenderer::eType CHyprGLRenderer::type() {
     return RT_GL;
 }
 
+bool CHyprGLRenderer::hasActiveScreenShader() const {
+    return g_pHyprOpenGL && g_pHyprOpenGL->m_finalScreenShader && (g_pHyprOpenGL->m_finalScreenShader->program() >= 1 || m_crashingInProgress);
+}
+
 void CHyprGLRenderer::initRender() {
     g_pHyprOpenGL->makeEGLCurrent();
     g_pHyprRenderer->m_renderData.pMonitor = renderData().pMonitor;
