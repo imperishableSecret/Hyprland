@@ -244,7 +244,16 @@ namespace Render {
         virtual bool initRenderBuffer(SP<Aquamarine::IBuffer> buffer, uint32_t fmt) {
             return false;
         };
-        virtual void         resetRenderBuffer() {};
+        virtual void resetRenderBuffer() {};
+
+        struct SPreparedRenderFrame {
+            CRegion damage;
+            bool    acquiredSwapchainBuffer = false;
+        };
+
+        void                 prepareRenderPass(PHLMONITOR pMonitor, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple);
+        bool                 prepareRenderFrame(PHLMONITOR pMonitor, const CRegion& damage, SP<IHLBuffer> buffer, SPreparedRenderFrame& prepared);
+        bool                 beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPreparedRenderFrame& prepared, CRegion& damage, bool simple);
 
         SP<ITexture>         getBackground(PHLMONITOR pMonitor);
         virtual SP<ITexture> getBlurTexture(PHLMONITORREF pMonitor);

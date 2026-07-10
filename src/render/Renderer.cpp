@@ -1707,7 +1707,7 @@ void IHyprRenderer::renderSessionLockMissing(PHLMONITOR pMonitor) {
     }
 }
 
-bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple) {
+void IHyprRenderer::prepareRenderPass(PHLMONITOR pMonitor, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple) {
     m_renderPass.clear();
     clearCMSettingsCache();
     m_renderMode          = mode;
@@ -1723,24 +1723,10 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
 
     if (HAS_MIRROR_FB && !RESOURCES->shouldKeepMirrorFB())
         RESOURCES->releaseMirrorFB();
+}
 
-    if (m_renderMode == RENDER_MODE_FULL_FAKE)
-        return beginFullFakeRenderInternal(pMonitor, damage, fb, simple);
-
-    int         bufferAge               = 0;
-    bool        acquiredSwapchainBuffer = false;
-    bool        renderSetupComplete     = false;
-
-    CScopeGuard failedSetupGuard([&]() {
-        if (renderSetupComplete)
-            return;
-
-        if (acquiredSwapchainBuffer)
-            pMonitor->m_output->swapchain->rollback();
-
-        resetRenderBuffer();
-        m_currentBuffer.reset();
-    });
+bool IHyprRenderer::prepareRenderFrame(PHLMONITOR pMonitor, const CRegion& damage, SP<IHLBuffer> buffer, SPreparedRenderFrame& prepared) {
+    int bufferAge = 0;
 
     if (!buffer) {
         m_currentBuffer = pMonitor->m_output->swapchain->next(&bufferAge);
@@ -1748,10 +1734,22 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
             Log::logger->log(Log::ERR, "Failed to acquire swapchain buffer for {}", pMonitor->m_name);
             return false;
         }
-        acquiredSwapchainBuffer = true;
+        prepared.acquiredSwapchainBuffer = true;
     } else
         m_currentBuffer = buffer;
 
+    if (m_renderMode == RENDER_MODE_NORMAL) {
+        prepared.damage = pMonitor->m_damage.getBufferDamage(bufferAge);
+
+        if (pMonitor->needsACopyFB())
+            prepared.damage.add(pMonitor->resources()->pendingMirrorFBDamage());
+    } else
+        prepared.damage = damage.copy();
+
+    return true;
+}
+
+bool IHyprRenderer::beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPreparedRenderFrame& prepared, CRegion& damage, bool simple) {
     initRender();
 
     if (!initRenderBuffer(m_currentBuffer, pMonitor->m_output->state->state().drmFormat)) {
@@ -1759,15 +1757,34 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
         return false;
     }
 
-    if (m_renderMode == RENDER_MODE_NORMAL) {
-        damage = pMonitor->m_damage.getBufferDamage(bufferAge);
+    damage = prepared.damage;
+    return beginRenderInternal(pMonitor, damage, simple);
+}
 
-        if (pMonitor->needsACopyFB())
-            damage.add(pMonitor->resources()->pendingMirrorFBDamage());
-    }
+bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple) {
+    prepareRenderPass(pMonitor, mode, buffer, fb, simple);
 
-    const auto res = beginRenderInternal(pMonitor, damage, simple);
-    if (!res)
+    if (m_renderMode == RENDER_MODE_FULL_FAKE)
+        return beginFullFakeRenderInternal(pMonitor, damage, fb, simple);
+
+    SPreparedRenderFrame prepared;
+    bool                 renderSetupComplete = false;
+
+    CScopeGuard          failedSetupGuard([&]() {
+        if (renderSetupComplete)
+            return;
+
+        if (prepared.acquiredSwapchainBuffer)
+            pMonitor->m_output->swapchain->rollback();
+
+        resetRenderBuffer();
+        m_currentBuffer.reset();
+    });
+
+    if (!prepareRenderFrame(pMonitor, damage, buffer, prepared))
+        return false;
+
+    if (!beginPreparedRenderTarget(pMonitor, prepared, damage, simple))
         return false;
 
     if (m_renderMode == RENDER_MODE_NORMAL)
