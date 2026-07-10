@@ -134,6 +134,9 @@ CFileDescriptor CHyprGLRenderer::endRender(const std::function<void()>& renderin
     if (!explicitSyncSupported()) {
         Log::logger->log(Log::TRACE, "renderer: Explicit sync unsupported, falling back to implicit in endRender");
 
+        if (m_renderMode == RENDER_MODE_NORMAL)
+            PMONITOR->resetExplicitFences();
+
         // nvidia doesn't have implicit sync, so we have to explicitly wait here, llvmpipe and other software renderer seems to bug out as well.
         if ((isNvidia() && *PNVIDIAANTIFLICKER) || isSoftware())
             glFinish();
@@ -176,6 +179,9 @@ CFileDescriptor CHyprGLRenderer::endRender(const std::function<void()>& renderin
         }
     } else {
         Log::logger->log(Log::ERR, "renderer: Explicit sync failed, releasing resources");
+
+        if (m_renderMode == RENDER_MODE_NORMAL)
+            PMONITOR->resetExplicitFences();
 
         if ((isNvidia() && *PNVIDIAANTIFLICKER) || isSoftware())
             glFinish();

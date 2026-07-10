@@ -2609,7 +2609,7 @@ bool IHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
     if (!ok) {
         if (pMonitor->m_inFence.isValid()) {
             Log::logger->log(Log::TRACE, "Monitor state commit failed, retrying without a fence");
-            pMonitor->m_output->state->resetExplicitFences();
+            pMonitor->resetExplicitFences();
             ok = pMonitor->m_state.commit();
         }
 

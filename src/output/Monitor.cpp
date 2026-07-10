@@ -268,7 +268,7 @@ void CMonitor::onConnect(bool noRule) {
         auto cpy = monitorRule;
         applyMonitorRule(std::move(cpy));
 
-        m_output->state->resetExplicitFences();
+        resetExplicitFences();
         m_output->state->setEnabled(true);
         m_state.commit();
         return;
@@ -277,7 +277,7 @@ void CMonitor::onConnect(bool noRule) {
     // if it's disabled, disable and ignore
     if (monitorRule.m_disabled) {
 
-        m_output->state->resetExplicitFences();
+        resetExplicitFences();
         m_output->state->setEnabled(false);
 
         if (!m_state.commit())
@@ -304,7 +304,7 @@ void CMonitor::onConnect(bool noRule) {
 
     m_enabled = true;
 
-    m_output->state->resetExplicitFences();
+    resetExplicitFences();
     m_output->state->setEnabled(true);
 
     // set mode, also applies
@@ -496,7 +496,7 @@ void CMonitor::onDisconnect(bool destroy) {
     m_activeWorkspace.reset();
 
     if (m_output) {
-        m_output->state->resetExplicitFences();
+        resetExplicitFences();
         m_output->state->setAdaptiveSync(false);
         m_output->state->setEnabled(false);
 
@@ -734,7 +734,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule) {
 
     // if it's disabled, disable and ignore
     if (RULE->m_disabled) {
-        m_output->state->resetExplicitFences();
+        resetExplicitFences();
         m_output->state->setAdaptiveSync(false);
         m_output->state->setEnabled(false);
 
@@ -867,7 +867,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule) {
     m_output->state->setFormat(initialFormat);
     m_prevDrmFormat = m_drmFormat;
     m_drmFormat     = initialFormat;
-    m_output->state->resetExplicitFences();
+    resetExplicitFences();
 
     if (Env::isTrace()) {
         Log::logger->log(Log::TRACE, "Monitor {} requested modes:", m_name);
@@ -2288,7 +2288,7 @@ bool CMonitor::attemptDirectScanout() {
         m_output->state->setFormat(previousFormat);
         m_output->state->setBuffer(previousBuffer);
         m_output->state->setPresentationMode(previousPresentationMode);
-        m_output->state->resetExplicitFences();
+        resetExplicitFences();
     }};
 
     const bool  NEEDS_TEST = !m_lastScanout || m_drmFormat != params.format; // do not retest while it's active
@@ -2326,10 +2326,10 @@ bool CMonitor::attemptDirectScanout() {
             m_output->state->setExplicitInFence(m_inFence.get());
         } else {
             Log::logger->log(Log::WARN, "attemptDirectScanout: failed to create a multi-GPU completion fence, falling back without an explicit fence");
-            m_output->state->resetExplicitFences(); // good luck.
+            resetExplicitFences(); // good luck.
         }
     } else
-        m_output->state->resetExplicitFences();
+        resetExplicitFences();
 
     // no need to do explicit sync here as surface current can only ever be ready to read
 
@@ -2445,6 +2445,13 @@ bool CMonitor::isMultiGPU() {
     return !*m_cachedSameGPU;
 }
 
+void CMonitor::resetExplicitFences() {
+    if (m_output)
+        m_output->state->resetExplicitFences();
+
+    m_inFence.reset();
+}
+
 bool CMonitor::shouldUseSoftwareCursors() {
     static auto PNOHW      = CConfigValue<Config::INTEGER>("cursor:no_hardware_cursors");
     static auto PINVISIBLE = CConfigValue<Config::INTEGER>("cursor:invisible");
@@ -2498,7 +2505,7 @@ void CMonitor::setDPMS(bool on) {
 }
 
 void CMonitor::commitDPMSState(bool state) {
-    m_output->state->resetExplicitFences();
+    resetExplicitFences();
     m_output->state->setEnabled(state);
 
     if (!m_state.commit()) {
@@ -2513,7 +2520,7 @@ void CMonitor::commitDPMSState(bool state) {
                 if (!self)
                     return;
 
-                m_output->state->resetExplicitFences();
+                resetExplicitFences();
                 m_output->state->setEnabled(m_dpmsStatus);
                 if (!m_state.commit()) {
                     Log::logger->log(Log::ERR, "Couldn't retry committing output {} for DPMS = {}", m_name, m_dpmsStatus);

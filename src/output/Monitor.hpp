@@ -304,6 +304,7 @@ namespace Monitor {
         bool         canAttemptDirectScanoutFast() const;
         bool         isFormatScanoutCapable(uint32_t format, uint64_t modifier);
         bool         isMultiGPU();
+        void         resetExplicitFences();
         void         setCTM(const Mat3x3& ctm);
         void         onCursorMovedOnMonitor();
         void         setDPMS(bool on);
