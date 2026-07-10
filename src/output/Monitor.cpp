@@ -57,6 +57,7 @@
 #include <hyprutils/utils/ScopeGuard.hpp>
 #include <cstring>
 #include <climits>
+#include <bit>
 #include <optional>
 #include <ranges>
 #include <vector>
@@ -2143,6 +2144,69 @@ bool CMonitor::isVrrKeepaliveDue() {
     return m_lastPresentationTimer.getMillis() > 1000.0f / m_vrrMinHz;
 }
 
+static uint64_t scanoutHashCombine(uint64_t hash, uint64_t value) {
+    return (hash ^ value) * 1099511628211ULL;
+}
+
+static uint64_t scanoutLutHash(const std::vector<uint16_t>& lut) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (const auto value : lut)
+        hash = scanoutHashCombine(hash, value);
+    return scanoutHashCombine(hash, lut.size());
+}
+
+static uint64_t scanoutCTMHash(const Mat3x3& ctm) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (const auto value : ctm.getMatrix())
+        hash = scanoutHashCombine(hash, std::bit_cast<uint32_t>(value));
+    return hash;
+}
+
+static uint64_t scanoutHDRMetadataHash(const hdr_output_metadata& metadata) {
+    const auto& INFO = metadata.hdmi_metadata_type1;
+    uint64_t    hash = scanoutHashCombine(1469598103934665603ULL, metadata.metadata_type);
+    hash             = scanoutHashCombine(hash, INFO.eotf);
+    hash             = scanoutHashCombine(hash, INFO.metadata_type);
+    for (const auto& primary : INFO.display_primaries) {
+        hash = scanoutHashCombine(hash, primary.x);
+        hash = scanoutHashCombine(hash, primary.y);
+    }
+    hash = scanoutHashCombine(hash, INFO.white_point.x);
+    hash = scanoutHashCombine(hash, INFO.white_point.y);
+    hash = scanoutHashCombine(hash, INFO.max_display_mastering_luminance);
+    hash = scanoutHashCombine(hash, INFO.min_display_mastering_luminance);
+    hash = scanoutHashCombine(hash, INFO.max_cll);
+    return scanoutHashCombine(hash, INFO.max_fall);
+}
+
+SScanoutTestState CMonitor::scanoutTestState(SP<IHLBuffer> buffer) const {
+    const auto& STATE  = m_output->state->state();
+    const auto  PARAMS = buffer->dmabuf();
+    const auto  MODE   = STATE.mode ? STATE.mode.get() : STATE.customMode.get();
+
+    return {
+        .bufferId         = rc<uintptr_t>(buffer.get()),
+        .modeId           = rc<uintptr_t>(STATE.mode.get()),
+        .customModeId     = rc<uintptr_t>(STATE.customMode.get()),
+        .bufferFormat     = PARAMS.format,
+        .outputFormat     = STATE.drmFormat,
+        .bufferModifier   = PARAMS.modifier,
+        .ctmHash          = scanoutCTMHash(STATE.ctm),
+        .hdrMetadataHash  = scanoutHDRMetadataHash(STATE.hdrMetadata),
+        .gammaLutHash     = scanoutLutHash(STATE.gammaLut),
+        .degammaLutHash   = scanoutLutHash(STATE.degammaLut),
+        .modeWidth        = sc<int32_t>(STATE.lastModeSize.x),
+        .modeHeight       = sc<int32_t>(STATE.lastModeSize.y),
+        .modeRefreshRate  = MODE ? MODE->refreshRate : 0,
+        .presentationMode = sc<int32_t>(STATE.presentationMode),
+        .transform        = sc<int32_t>(m_transform),
+        .contentType      = STATE.contentType,
+        .enabled          = STATE.enabled,
+        .adaptiveSync     = STATE.adaptiveSync,
+        .wideColorGamut   = STATE.wideColorGamut,
+    };
+}
+
 bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer) {
     static const auto PSAMEFIFO = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer_fifo");
 
@@ -2152,12 +2216,15 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
     const bool vrrKeepaliveDue      = isVrrKeepaliveDue();
     const bool outputStateCommitDue = m_output->state->state().committed != 0;
 
-    if (cursorCommitDue || vrrKeepaliveDue || outputStateCommitDue) {
+    if (sameBufferScanoutNeedsCommit(cursorCommitDue, vrrKeepaliveDue, outputStateCommitDue)) {
         m_output->state->setBuffer(buffer);
-        if (!m_state.test()) {
+        const auto TEST_STATE = scanoutTestState(buffer);
+        const bool NEEDS_TEST = !m_scanoutTestCache.canSkip(TEST_STATE, outputStateCommitDue, m_scanoutNeedsCursorUpdate);
+        if (NEEDS_TEST && !m_state.test()) {
             Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursorCommitDue: {}, vrrKeepaliveDue: {}, outputStateCommitDue: {}", cursorCommitDue,
                              vrrKeepaliveDue, outputStateCommitDue);
             m_lastScanout.reset();
+            m_scanoutTestCache.invalidate();
             return false;
         }
 
@@ -2166,9 +2233,11 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
             Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursorCommitDue: {}, vrrKeepaliveDue: {}, outputStateCommitDue: {}", cursorCommitDue,
                              vrrKeepaliveDue, outputStateCommitDue);
             m_lastScanout.reset();
+            m_scanoutTestCache.invalidate();
             return false;
         }
 
+        m_scanoutTestCache.accept(TEST_STATE);
         m_scanoutNeedsCursorUpdate = false;
         return true;
     }
@@ -2237,6 +2306,7 @@ bool CMonitor::attemptDirectScanout() {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed basic test");
         if (!isFormatScanoutCapable(params.format, params.modifier))
             m_cachedScanoutFormatCheck = {.format = params.format, .modifier = params.modifier, .ok = false, .valid = true};
+        m_scanoutTestCache.invalidate();
         return false;
     }
 
@@ -2266,10 +2336,12 @@ bool CMonitor::attemptDirectScanout() {
     if (!ok) {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed to scanout surface");
         m_lastScanout.reset();
+        m_scanoutTestCache.invalidate();
         return false;
     }
 
     scanoutCommitted = true;
+    m_scanoutTestCache.accept(scanoutTestState(PBUFFER));
 
     if (m_lastScanout.expired()) {
         m_lastScanout = PCANDIDATE;
@@ -2296,6 +2368,7 @@ void CMonitor::handleDSleave() {
     Log::logger->log(Log::DEBUG, "Left a direct scanout.");
     m_lastScanout.reset();
     invalidateScanoutFormatCache();
+    m_scanoutTestCache.invalidate();
     m_previousFSWindow.reset(); // recalc fs settings
     m_directScanoutIsActive = false;
 

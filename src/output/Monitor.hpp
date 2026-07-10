@@ -26,6 +26,7 @@
 #include "../helpers/cm/ColorManagement.hpp"
 #include "../helpers/signal/Signal.hpp"
 #include "DamageRing.hpp"
+#include "ScanoutTestCache.hpp"
 #include <aquamarine/output/Output.hpp>
 #include <aquamarine/allocator/Swapchain.hpp>
 #include <hyprutils/os/FileDescriptor.hpp>
@@ -161,9 +162,9 @@ namespace Monitor {
             bool     valid    = false;
         } m_cachedScanoutFormatCheck;
 
-        void invalidateScanoutFormatCache() {
-            m_cachedScanoutFormatCheck.valid = false;
-        }
+        CScanoutTestCache m_scanoutTestCache;
+
+        void              invalidateScanoutFormatCache();
 
         // for special fade/blur
         PHLANIMVAR<float> m_specialFade;
@@ -413,6 +414,7 @@ namespace Monitor {
         void                    clearModeRetry();
         void                    updateVCGTRamps();
         bool                    attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer);
+        SScanoutTestState       scanoutTestState(SP<IHLBuffer> buffer) const;
         bool                    trySetFormat(std::span<const uint32_t> formats);
 
         bool                    m_doneScheduled  = false;
