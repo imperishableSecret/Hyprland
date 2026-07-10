@@ -1,5 +1,6 @@
 #include <render/pass/Pass.hpp>
 #include <render/pass/PreBlurElement.hpp>
+#include <render/pass/TexPassElement.hpp>
 
 #include <gtest/gtest.h>
 
@@ -46,6 +47,7 @@ TEST(PassRequirements, reportsBlurAndTransformerReasons) {
     pass.add(makeUnique<CRequirementPassElement>(false, true));
     pass.add(makeUnique<CRequirementPassElement>(false, false, EK_TRANSFORMED_WINDOW));
     pass.add(makeUnique<CPreBlurElement>());
+    pass.add(makeUnique<CTexPassElement>(CTexPassElement::SRenderData{.blur = true}));
 
     const auto REQUIREMENTS = pass.requirements();
     EXPECT_TRUE(REQUIREMENTS.has(RPR_LIVE_BLUR));

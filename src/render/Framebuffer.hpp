@@ -20,7 +20,8 @@ namespace Render {
         virtual void                        release()                                                                                                                  = 0;
         virtual bool                        readPixels(CHLBufferReference buffer, uint32_t offsetX = 0, uint32_t offsetY = 0, uint32_t width = 0, uint32_t height = 0) = 0;
 
-        virtual void                        bind() = 0;
+        virtual void                        bind()   = 0;
+        virtual void                        unbind() = 0;
 
         bool                                isAllocated();
         SP<ITexture>                        getTexture();

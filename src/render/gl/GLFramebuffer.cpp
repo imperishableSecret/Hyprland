@@ -6,6 +6,7 @@
 #include "../Framebuffer.hpp"
 #include <hyprgraphics/egl/Egl.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -76,8 +77,21 @@ void CGLFramebuffer::addStencil(SP<ITexture> tex) {
     if (m_stencilTex == tex)
         return;
 
-    RASSERT(!m_fbAllocated, "Should add stencil tex prior to FB allocation")
     m_stencilTex = tex;
+
+    if (!m_fbAllocated)
+        return;
+
+    bind();
+    if (m_stencilTex && m_stencilTex->ok()) {
+        m_stencilTex->bind();
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, m_stencilTex->m_texID, 0);
+        m_stencilTex->unbind();
+    } else
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+
+    const auto STATUS = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+    RASSERT(STATUS == GL_FRAMEBUFFER_COMPLETE, "Framebuffer incomplete after changing stencil attachment (status: {})", STATUS);
 }
 
 void CGLFramebuffer::bind() {
@@ -243,11 +257,12 @@ GLuint CGLFramebuffer::getFBID() {
 }
 
 void CGLFramebuffer::invalidate(const std::vector<GLenum>& attachments) {
-    if (!isAllocated())
+    if (!m_fbAllocated)
         return;
 
     glInvalidateFramebuffer(GL_FRAMEBUFFER, attachments.size(), attachments.data());
-    m_cleared = false;
+    if (std::ranges::contains(attachments, GL_COLOR_ATTACHMENT0))
+        m_cleared = false;
 }
 
 void CGLFramebuffer::clearAfterInvalidation() {

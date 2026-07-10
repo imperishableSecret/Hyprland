@@ -13,6 +13,8 @@ void IElementRenderer::drawElement(WP<IPassElement> element, const CRegion& dama
     if (!element)
         return;
 
+    g_pHyprRenderer->ensureRenderPassTargetForDraw();
+
     switch (element->type()) {
         case EK_BORDER: draw(dynamicPointerCast<CBorderPassElement>(element), damage); break;
         case EK_CLEAR: drawClear(dynamicPointerCast<CClearPassElement>(element), damage); break;

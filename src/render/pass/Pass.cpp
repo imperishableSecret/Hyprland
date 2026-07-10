@@ -12,6 +12,7 @@
 #include "../../protocols/core/Compositor.hpp"
 #include "../../state/MonitorState.hpp"
 #include "RectPassElement.hpp"
+#include "TexPassElement.hpp"
 #include "macros.hpp"
 
 using namespace Render;
@@ -132,6 +133,10 @@ CRenderPassRequirements CRenderPass::requirements(const SRenderPassExternalRequi
 
         switch (ELEMENT->type()) {
             case EK_TRANSFORMED_WINDOW: requirements.add(RPR_WINDOW_TRANSFORMER); break;
+            case EK_TEXTURE:
+                if (dc<CTexPassElement*>(ELEMENT)->m_data.blur)
+                    requirements.add(RPR_LIVE_BLUR);
+                break;
             case EK_UNKNOWN:
             case EK_FRAMEBUFFER:
             case EK_TEXTURE_MATTE:

@@ -198,7 +198,8 @@ namespace Render::GL {
         };
 
         void makeEGLCurrent();
-        void begin(PHLMONITOR, const CRegion& damage, SP<IFramebuffer> fb = nullptr, std::optional<CRegion> finalDamage = {});
+        void begin(PHLMONITOR, const CRegion& damage, SP<IFramebuffer> fb = nullptr, std::optional<CRegion> finalDamage = {},
+                   const CRenderPassRequirements* requirements = nullptr);
         void beginSimple(PHLMONITOR, const CRegion& damage, SP<IRenderbuffer> rb = nullptr, SP<IFramebuffer> fb = nullptr);
         void end();
 
@@ -316,11 +317,13 @@ namespace Render::GL {
         int                              m_drmFD = -1;
         std::string                      m_extensions;
 
-        bool                             m_fakeFrame            = false;
-        bool                             m_applyFinalShader     = false;
-        bool                             m_blend                = false;
-        bool                             m_offloadedFramebuffer = false;
-        bool                             m_cmSupported          = true;
+        bool                             m_fakeFrame                = false;
+        bool                             m_applyFinalShader         = false;
+        bool                             m_blend                    = false;
+        bool                             m_offloadedFramebuffer     = false;
+        bool                             m_renderPassTargetPrepared = false;
+        bool                             m_directFramebuffer        = false;
+        bool                             m_cmSupported              = true;
 
         SP<CShader>                      m_finalScreenShader;
         GLuint                           m_currentProgram;
@@ -328,6 +331,7 @@ namespace Render::GL {
         void                             initDRMFormats();
         void                             initEGL(bool gbm);
         EGLDeviceEXT                     eglDeviceFromDRMFD(int drmFD);
+        void                             prepareRenderPassTarget(const CRenderPassRequirements& requirements);
 
         // for the final shader
         std::array<CTimer, POINTER_PRESSED_HISTORY_LENGTH>   m_pressedHistoryTimers    = {};

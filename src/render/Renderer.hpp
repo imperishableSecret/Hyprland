@@ -235,7 +235,7 @@ namespace Render {
         bool         beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMode mode = RENDER_MODE_NORMAL, SP<IHLBuffer> buffer = {}, SP<IFramebuffer> fb = nullptr,
                                  bool simple = false);
 
-        virtual bool beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, bool simple = false) {
+        virtual bool beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, bool simple = false, const CRenderPassRequirements* requirements = nullptr) {
             return false;
         };
         virtual bool beginFullFakeRenderInternal(PHLMONITOR pMonitor, CRegion& damage, SP<IFramebuffer> fb, bool simple = false) {
@@ -249,6 +249,7 @@ namespace Render {
         virtual bool hasActiveScreenShader() const {
             return false;
         };
+        virtual void ensureRenderPassTargetForDraw() {};
 
         struct SPreparedRenderFrame {
             CRegion damage;
@@ -257,7 +258,9 @@ namespace Render {
 
         void                            prepareRenderPass(PHLMONITOR pMonitor, eRenderMode mode, SP<IHLBuffer> buffer, SP<IFramebuffer> fb, bool simple);
         bool                            prepareRenderFrame(PHLMONITOR pMonitor, const CRegion& damage, SP<IHLBuffer> buffer, SPreparedRenderFrame& prepared);
-        bool                            beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPreparedRenderFrame& prepared, CRegion& damage, bool simple);
+        bool                            prepareRenderTargetBuffer(PHLMONITOR pMonitor);
+        bool                            beginPreparedRenderTarget(PHLMONITOR pMonitor, CRegion& damage, bool simple, const CRenderPassRequirements* requirements = nullptr);
+        void                            ensureRenderAssetsInitialized();
         SRenderPassExternalRequirements renderPassExternalRequirements() const;
 
         SP<ITexture>                    getBackground(PHLMONITOR pMonitor);
@@ -331,6 +334,7 @@ namespace Render {
         SP<CEventLoopTimer>            m_renderUnfocusedTimer;
 
         friend class CRenderPass;
+        friend class IElementRenderer;
         friend class Render::GL::CHyprOpenGLImpl;
         friend class CToplevelExportFrame;
         friend class Screenshare::CScreenshareFrame;

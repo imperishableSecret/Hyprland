@@ -43,11 +43,12 @@ namespace Render::GL {
       private:
         void                 renderOffToMain(SP<IFramebuffer> off) override;
         SP<IRenderbuffer>    getOrCreateRenderbufferInternal(SP<Aquamarine::IBuffer> buffer, uint32_t fmt) override;
-        bool                 beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, bool simple = false) override;
+        bool                 beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, bool simple = false, const CRenderPassRequirements* requirements = nullptr) override;
         bool                 beginFullFakeRenderInternal(PHLMONITOR pMonitor, CRegion& damage, SP<IFramebuffer> fb, bool simple = false) override;
         void                 initRender() override;
         bool                 initRenderBuffer(SP<Aquamarine::IBuffer> buffer, uint32_t fmt) override;
         void                 resetRenderBuffer() override;
+        void                 ensureRenderPassTargetForDraw() override;
 
         SP<ITexture>         getBlurTexture(PHLMONITORREF pMonitor) override;
 

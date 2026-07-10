@@ -4,6 +4,7 @@
 #include "../config/ConfigValue.hpp"
 #include "../pointer/cursor/CursorManager.hpp"
 #include "../pointer/PointerManager.hpp"
+#include "../plugins/PluginSystem.hpp"
 #include "../protocols/SessionLock.hpp"
 #include "../protocols/LayerShell.hpp"
 #include "../protocols/PresentationTime.hpp"
@@ -78,20 +79,34 @@ bool CHyprGLRenderer::beginFullFakeRenderInternal(PHLMONITOR pMonitor, CRegion& 
     return true;
 }
 
-bool CHyprGLRenderer::beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, bool simple) {
+bool CHyprGLRenderer::beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, bool simple, const CRenderPassRequirements* requirements) {
 
     m_currentRenderbuffer->bind();
     if (simple)
         g_pHyprOpenGL->beginSimple(pMonitor, damage, m_currentRenderbuffer);
     else
-        g_pHyprOpenGL->begin(pMonitor, damage);
+        g_pHyprOpenGL->begin(pMonitor, damage, nullptr, {}, requirements);
+
+    if (!simple && !requirements && g_pPluginSystem && g_pPluginSystem->pluginCount() != 0)
+        ensureRenderPassTargetForDraw();
 
     return true;
+}
+
+void CHyprGLRenderer::ensureRenderPassTargetForDraw() {
+    if (!g_pHyprOpenGL || !m_renderData.mainFB || m_renderData.currentFB != m_renderData.mainFB)
+        return;
+
+    auto requirements = renderPassRequirements();
+    requirements.add(RPR_BACKEND_CONSTRAINT);
+    g_pHyprOpenGL->prepareRenderPassTarget(requirements);
 }
 
 CFileDescriptor CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallback) {
     const auto  PMONITOR           = g_pHyprRenderer->m_renderData.pMonitor;
     static auto PNVIDIAANTIFLICKER = CConfigValue<Config::INTEGER>("opengl:nvidia_anti_flicker");
+
+    g_pHyprOpenGL->prepareRenderPassTarget(renderPassRequirements());
 
     g_pHyprRenderer->m_renderData.damage = m_renderPass.render(g_pHyprRenderer->m_renderData.damage);
 

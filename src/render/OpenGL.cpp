@@ -9,6 +9,7 @@
 #include <random>
 #include <pango/pangocairo.h>
 #include "OpenGL.hpp"
+#include "gl/RenderTargetDecision.hpp"
 #include "PreblurDecision.hpp"
 #include "Renderer.hpp"
 #include "../Compositor.hpp"
@@ -699,7 +700,9 @@ void CHyprOpenGLImpl::beginSimple(PHLMONITOR pMonitor, const CRegion& damage, SP
     m_fakeFrame = true;
 
     g_pHyprRenderer->bindFB(FBO);
-    m_offloadedFramebuffer = false;
+    m_offloadedFramebuffer     = false;
+    m_renderPassTargetPrepared = true;
+    m_directFramebuffer        = false;
 
     g_pHyprRenderer->m_renderData.mainFB = g_pHyprRenderer->m_renderData.currentFB;
     g_pHyprRenderer->m_renderData.outFB  = FBO;
@@ -715,7 +718,7 @@ void CHyprOpenGLImpl::makeEGLCurrent() {
         eglMakeCurrent(g_pHyprOpenGL->m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, g_pHyprOpenGL->m_eglContext);
 }
 
-void CHyprOpenGLImpl::begin(PHLMONITOR pMonitor, const CRegion& damage_, SP<IFramebuffer> fb, std::optional<CRegion> finalDamage) {
+void CHyprOpenGLImpl::begin(PHLMONITOR pMonitor, const CRegion& damage_, SP<IFramebuffer> fb, std::optional<CRegion> finalDamage, const CRenderPassRequirements* requirements) {
     g_pHyprRenderer->m_renderData.pMonitor = pMonitor;
 
     const GLenum RESETSTATUS = glGetGraphicsResetStatus();
@@ -750,31 +753,79 @@ void CHyprOpenGLImpl::begin(PHLMONITOR pMonitor, const CRegion& damage_, SP<IFra
         applyScreenShader(*PSHADER);
     }
 
-    g_pHyprRenderer->bindFB(g_pHyprRenderer->m_renderData.pMonitor->resources()->getUnusedWorkBuffer());
-    m_offloadedFramebuffer = true;
-    if (!g_pHyprRenderer->m_renderData.damage.empty())
-        GLFB(g_pHyprRenderer->m_renderData.currentFB)->clearAfterInvalidation();
+    auto&      renderData    = g_pHyprRenderer->m_renderData;
+    const auto OUTPUT_FB     = fb ? fb : dc<CHyprGLRenderer*>(g_pHyprRenderer.get())->m_currentRenderbuffer->getFB();
+    const bool DIRECT_TARGET = requirements && g_pHyprRenderer->m_renderMode == RENDER_MODE_NORMAL && renderPassTargetFor(*requirements) == RENDER_PASS_TARGET_OUTPUT;
 
-    g_pHyprRenderer->m_renderData.mainFB = g_pHyprRenderer->m_renderData.currentFB;
-    g_pHyprRenderer->m_renderData.outFB  = fb ? fb : dc<CHyprGLRenderer*>(g_pHyprRenderer.get())->m_currentRenderbuffer->getFB();
+    renderData.outFB = OUTPUT_FB;
 
-    if UNLIKELY (g_pHyprRenderer->m_renderData.pMonitor->needsUnmodifiedCopy() && !m_fakeFrame) {
-        if (!g_pHyprRenderer->m_renderData.pMonitor->resources()->m_mirrorTex) {
-            GLenum buffers[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-            glDrawBuffers(2, buffers);
-            g_pHyprRenderer->m_renderData.pMonitor->resources()->enableMirror();
-        }
-        g_pHyprRenderer->m_renderData.mainFB->enableMirror(g_pHyprRenderer->m_renderData.pMonitor->resources()->m_mirrorTex);
+    if (DIRECT_TARGET) {
+        OUTPUT_FB->addStencil(pMonitor->resources()->m_stencilTex);
+        OUTPUT_FB->setImageDescription(pMonitor->m_imageDescription);
+        g_pHyprRenderer->bindFB(OUTPUT_FB);
+        renderData.mainFB          = renderData.currentFB;
+        m_offloadedFramebuffer     = false;
+        m_renderPassTargetPrepared = true;
+        m_directFramebuffer        = true;
     } else {
-        if (g_pHyprRenderer->m_renderData.pMonitor->resources()->m_mirrorTex) {
-            GLenum buffers[] = {GL_COLOR_ATTACHMENT0};
-            glDrawBuffers(1, buffers);
-            g_pHyprRenderer->m_renderData.pMonitor->resources()->disableMirror();
+        g_pHyprRenderer->bindFB(pMonitor->resources()->getUnusedWorkBuffer());
+        renderData.mainFB          = renderData.currentFB;
+        m_offloadedFramebuffer     = true;
+        m_renderPassTargetPrepared = false;
+        m_directFramebuffer        = false;
+
+        if UNLIKELY (pMonitor->needsUnmodifiedCopy() && !m_fakeFrame) {
+            if (!pMonitor->resources()->m_mirrorTex) {
+                GLenum buffers[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+                glDrawBuffers(2, buffers);
+                pMonitor->resources()->enableMirror();
+            }
+            renderData.mainFB->enableMirror(pMonitor->resources()->m_mirrorTex);
+        } else {
+            if (pMonitor->resources()->m_mirrorTex) {
+                GLenum buffers[] = {GL_COLOR_ATTACHMENT0};
+                glDrawBuffers(1, buffers);
+                pMonitor->resources()->disableMirror();
+            }
+            renderData.mainFB->disableMirror();
         }
-        g_pHyprRenderer->m_renderData.mainFB->disableMirror();
     }
 
     g_pHyprRenderer->pushMonitorTransformEnabled(false);
+
+    if (requirements)
+        prepareRenderPassTarget(*requirements);
+    else if (g_pHyprRenderer->m_renderMode != RENDER_MODE_NORMAL) {
+        CRenderPassRequirements requirements;
+        requirements.add(RPR_BACKEND_CONSTRAINT);
+        prepareRenderPassTarget(requirements);
+    }
+}
+
+void CHyprOpenGLImpl::prepareRenderPassTarget(const CRenderPassRequirements& requirements) {
+    if (m_renderPassTargetPrepared)
+        return;
+
+    m_renderPassTargetPrepared = true;
+
+    const auto TARGET = renderPassTargetFor(requirements);
+
+    if (TARGET == RENDER_PASS_TARGET_OUTPUT) {
+        auto&      renderData = g_pHyprRenderer->m_renderData;
+        const auto STENCIL    = renderData.mainFB->getStencilTex();
+
+        renderData.outFB->addStencil(STENCIL);
+        renderData.outFB->setImageDescription(renderData.pMonitor->m_imageDescription);
+        g_pHyprRenderer->bindFB(renderData.outFB);
+        renderData.mainFB      = renderData.currentFB;
+        m_offloadedFramebuffer = false;
+        m_directFramebuffer    = true;
+    }
+
+    // Scratch framebuffers are invalidated after use and need initialization.
+    // Output buffers retain valid pixels outside buffer-age damage.
+    if (!g_pHyprRenderer->m_renderData.damage.empty() && renderPassTargetNeedsFullClear(TARGET))
+        GLFB(g_pHyprRenderer->m_renderData.currentFB)->clearAfterInvalidation();
 }
 
 void CHyprOpenGLImpl::end() {
@@ -788,8 +839,8 @@ void CHyprOpenGLImpl::end() {
     g_pHyprRenderer->m_renderData.surface.reset();
     g_pHyprRenderer->m_renderData.clipBox = {};
 
-    // end the render, copy the data to the main framebuffer
-    if LIKELY (m_offloadedFramebuffer) {
+    // end the render, copy the data to the main framebuffer when the pass could not render directly
+    if (m_offloadedFramebuffer) {
         g_pHyprRenderer->m_renderData.damage = g_pHyprRenderer->m_renderData.finalDamage;
         g_pHyprRenderer->pushMonitorTransformEnabled(true);
 
@@ -840,6 +891,13 @@ void CHyprOpenGLImpl::end() {
         g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
         m_applyFinalShader                               = false;
         g_pHyprRenderer->popMonitorTransformEnabled();
+    } else if (m_directFramebuffer) {
+        g_pHyprRenderer->m_renderData.damage = g_pHyprRenderer->m_renderData.finalDamage;
+        GLFB(g_pHyprRenderer->m_renderData.currentFB)->invalidate({GL_STENCIL_ATTACHMENT});
+        g_pHyprRenderer->m_renderData.pMonitor->m_zoomController.m_resetCameraState = true;
+        g_pHyprRenderer->m_renderData.useNearestNeighbor                            = false;
+        m_applyFinalShader                                                          = false;
+        blend(true);
     }
 
     // reset our data
@@ -849,6 +907,8 @@ void CHyprOpenGLImpl::end() {
     g_pHyprRenderer->m_renderData.currentFB.reset();
     g_pHyprRenderer->m_renderData.mainFB.reset();
     g_pHyprRenderer->m_renderData.outFB.reset();
+    m_renderPassTargetPrepared = false;
+    m_directFramebuffer        = false;
     g_pHyprRenderer->popMonitorTransformEnabled();
 
     // invalidate our render FBs to signal to the driver we don't need them anymore

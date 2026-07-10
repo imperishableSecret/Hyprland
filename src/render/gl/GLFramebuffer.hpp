@@ -17,7 +17,7 @@ namespace Render::GL {
         bool   readPixels(CHLBufferReference buffer, uint32_t offsetX = 0, uint32_t offsetY = 0, uint32_t width = 0, uint32_t height = 0) override;
 
         void   bind() override;
-        void   unbind();
+        void   unbind() override;
         GLuint getFBID();
         void   invalidate(const std::vector<GLenum>& attachments);
 

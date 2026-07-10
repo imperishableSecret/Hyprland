@@ -9,6 +9,7 @@
 #include "../config/legacy/ConfigManager.hpp"
 #include "../pointer/cursor/CursorManager.hpp"
 #include "../pointer/PointerManager.hpp"
+#include "../plugins/PluginSystem.hpp"
 #include "../managers/input/InputManager.hpp"
 #include "../managers/screenshare/ScreenshareManager.hpp"
 #include "../animation/AnimationManager.hpp"
@@ -879,7 +880,16 @@ void IHyprRenderer::bindFB(SP<IFramebuffer> fb) {
 UP<CScopeGuard> IHyprRenderer::bindTempFB(SP<IFramebuffer> fb) {
     const auto oldFB = m_renderData.currentFB;
     bindFB(fb);
-    return makeUnique<CScopeGuard>([this, oldFB] { bindFB(oldFB); });
+    return makeUnique<CScopeGuard>([this, oldFB] {
+        if (oldFB) {
+            bindFB(oldFB);
+            return;
+        }
+
+        if (m_renderData.currentFB)
+            m_renderData.currentFB->unbind();
+        m_renderData.currentFB.reset();
+    });
 }
 
 bool IHyprRenderer::preBlurQueued(PHLMONITORREF pMonitor) {
@@ -1753,7 +1763,7 @@ bool IHyprRenderer::prepareRenderFrame(PHLMONITOR pMonitor, const CRegion& damag
     return true;
 }
 
-bool IHyprRenderer::beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPreparedRenderFrame& prepared, CRegion& damage, bool simple) {
+bool IHyprRenderer::prepareRenderTargetBuffer(PHLMONITOR pMonitor) {
     initRender();
 
     if (!initRenderBuffer(m_currentBuffer, pMonitor->m_output->state->state().drmFormat)) {
@@ -1761,8 +1771,20 @@ bool IHyprRenderer::beginPreparedRenderTarget(PHLMONITOR pMonitor, const SPrepar
         return false;
     }
 
-    damage = prepared.damage;
-    return beginRenderInternal(pMonitor, damage, simple);
+    return true;
+}
+
+bool IHyprRenderer::beginPreparedRenderTarget(PHLMONITOR pMonitor, CRegion& damage, bool simple, const CRenderPassRequirements* requirements) {
+    return beginRenderInternal(pMonitor, damage, simple, requirements);
+}
+
+void IHyprRenderer::ensureRenderAssetsInitialized() {
+    static bool initial = true;
+    if (!initial)
+        return;
+
+    initAssets();
+    initial = false;
 }
 
 SRenderPassExternalRequirements IHyprRenderer::renderPassExternalRequirements() const {
@@ -1774,12 +1796,12 @@ SRenderPassExternalRequirements IHyprRenderer::renderPassExternalRequirements() 
     const auto OUTPUT_DESCRIPTION = MONITOR->m_imageDescription;
 
     return {
-        .outputCopy        = MONITOR->needsACopyFB() || MONITOR->isMirror(),
-        .screenShader      = hasActiveScreenShader() && !m_renderData.blockScreenShader,
-        .colorConversion   = WORK_DESCRIPTION && OUTPUT_DESCRIPTION && WORK_DESCRIPTION->value() != OUTPUT_DESCRIPTION->value(),
+        .outputCopy        = MONITOR->needsACopyFB() || MONITOR->needsUnmodifiedCopy() || MONITOR->isMirror(),
+        .screenShader      = (hasActiveScreenShader() || m_reloadScreenShader) && !m_renderData.blockScreenShader,
+        .colorConversion   = !WORK_DESCRIPTION || !OUTPUT_DESCRIPTION || WORK_DESCRIPTION->value() != OUTPUT_DESCRIPTION->value(),
         .zoom              = m_renderData.mouseZoomFactor != 1.F,
         .outputTransform   = MONITOR->m_transform != WL_OUTPUT_TRANSFORM_NORMAL,
-        .backendConstraint = m_renderMode != RENDER_MODE_NORMAL,
+        .backendConstraint = m_renderMode != RENDER_MODE_NORMAL || MONITOR->useFP16() || (g_pPluginSystem && g_pPluginSystem->pluginCount() != 0),
     };
 }
 
@@ -1806,7 +1828,11 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
     if (!prepareRenderFrame(pMonitor, damage, buffer, prepared))
         return false;
 
-    if (!beginPreparedRenderTarget(pMonitor, prepared, damage, simple))
+    if (!prepareRenderTargetBuffer(pMonitor))
+        return false;
+
+    damage = prepared.damage;
+    if (!beginPreparedRenderTarget(pMonitor, damage, simple))
         return false;
 
     if (m_renderMode == RENDER_MODE_NORMAL)
@@ -1814,11 +1840,7 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
 
     renderSetupComplete = true;
 
-    static bool initial = true;
-    if (initial) {
-        initAssets();
-        initial = false;
-    }
+    ensureRenderAssetsInitialized();
 
     return true;
 }
@@ -2184,15 +2206,33 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         m_renderData.useNearestNeighbor = false;
     }
 
-    CRegion damage, finalDamage;
-    if (!beginRender(pMonitor, damage, RENDER_MODE_NORMAL)) {
-        Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
+    CRegion              damage, finalDamage;
+    SPreparedRenderFrame prepared;
+
+    prepareRenderPass(pMonitor, RENDER_MODE_NORMAL, nullptr, nullptr, false);
+
+    CScopeGuard failedSetupGuard([&]() {
+        if (renderSetupSucceeded)
+            return;
+
+        if (prepared.acquiredSwapchainBuffer)
+            pMonitor->m_output->swapchain->rollback();
+
+        resetRenderBuffer();
+        m_currentBuffer.reset();
+    });
+
+    if (!prepareRenderFrame(pMonitor, damage, nullptr, prepared) || !prepareRenderTargetBuffer(pMonitor)) {
+        Log::logger->log(Log::ERR, "renderer: couldn't prepare render frame!");
         return {};
     }
-    renderSetupSucceeded = true;
+
+    damage = prepared.damage;
+    ensureRenderAssetsInitialized();
 
     // if we have no tracking or full tracking, invalidate the entire monitor
-    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
+    const bool FORCE_FULL_FRAME = pMonitor->m_forceFullFrames > 0;
+    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || FORCE_FULL_FRAME || damageBlinkCleanup > 0)
         damage = {0, 0, sc<int>(pMonitor->m_transformedSize.x) * 10, sc<int>(pMonitor->m_transformedSize.y) * 10};
 
     finalDamage = damage;
@@ -2200,10 +2240,30 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     // update damage in renderdata as we modified it
     setDamage(damage, finalDamage);
 
-    if (pMonitor->m_forceFullFrames > 0) {
-        pMonitor->m_forceFullFrames -= 1;
-        if (pMonitor->m_forceFullFrames > 10)
-            pMonitor->m_forceFullFrames = 0;
+    auto beginRenderTarget = [&](CRenderPassRequirements requirements) {
+        if (renderSetupSucceeded)
+            return true;
+
+        if (!beginPreparedRenderTarget(pMonitor, damage, false, &requirements))
+            return false;
+
+        pMonitor->m_damage.rotate();
+        renderSetupSucceeded = true;
+
+        if (FORCE_FULL_FRAME) {
+            pMonitor->m_forceFullFrames -= 1;
+            if (pMonitor->m_forceFullFrames > 10)
+                pMonitor->m_forceFullFrames = 0;
+        }
+
+        return true;
+    };
+
+    // Render hooks may issue immediate GL commands. Plugins are therefore a
+    // conservative offscreen path that begins before hook dispatch.
+    if (g_pPluginSystem && g_pPluginSystem->pluginCount() != 0 && !beginRenderTarget(renderPassRequirements())) {
+        Log::logger->log(Log::ERR, "renderer: couldn't begin plugin-compatible render target!");
+        return {};
     }
 
     Event::bus()->m_events.render.stage.emit(RENDER_BEGIN);
@@ -2272,6 +2332,11 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     }
 
     Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
+
+    if (!beginRenderTarget(renderPassRequirements())) {
+        Log::logger->log(Log::ERR, "renderer: couldn't begin prepared render target!");
+        return {};
+    }
 
     auto renderCompletionFence = endRender();
 
