@@ -4,6 +4,51 @@
 #include "../output/Monitor.hpp"
 #include "../event/EventBus.hpp"
 #include "../state/MonitorState.hpp"
+#include "../managers/eventLoop/EventLoopManager.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <optional>
+
+Fifo::SWatchdogTransition Fifo::CWatchdogState::lockedQueued(bool mapped, bool scheduled, bool tearing) {
+    if (!mapped || !scheduled || tearing)
+        return {};
+
+    m_armed = true;
+    return {.armTimer = true};
+}
+
+Fifo::SWatchdogTransition Fifo::CWatchdogState::clear(eWatchdogClearReason reason) {
+    if (!m_armed)
+        return {};
+
+    m_armed = false;
+    return {.cancelTimer = reason != WATCHDOG_EXPIRED};
+}
+
+bool Fifo::CWatchdogState::armed() const {
+    return m_armed;
+}
+
+float Fifo::slowestRelevantRefresh(std::span<const SWatchdogOutput> outputs, float fallbackRefreshRate) {
+    std::optional<float> slowestRefreshRate;
+
+    for (const auto& output : outputs) {
+        if (!output.enabled || output.tearing || output.refreshRate <= 0.F)
+            continue;
+
+        if (!slowestRefreshRate || output.refreshRate < *slowestRefreshRate)
+            slowestRefreshRate = output.refreshRate;
+    }
+
+    return slowestRefreshRate.value_or(fallbackRefreshRate);
+}
+
+int Fifo::watchdogTimeoutMs(float refreshRate) {
+    const float EFFECTIVE_REFRESH_RATE = refreshRate > 0.F ? refreshRate : 60.F;
+    const int   WATCHDOG_MS            = sc<int>(std::ceil(3000.F / EFFECTIVE_REFRESH_RATE));
+    return std::clamp(WATCHDOG_MS, 50, 250);
+}
 
 CFifoResource::CFifoResource(UP<CWpFifoV1>&& resource_, SP<CWLSurfaceResource> surface) : m_resource(std::move(resource_)), m_surface(surface) {
     if UNLIKELY (!m_resource->resource())
@@ -47,10 +92,6 @@ CFifoResource::CFifoResource(UP<CWpFifoV1>&& resource_, SP<CWLSurfaceResource> s
 
         static const auto PPEND = CConfigValue<Config::INTEGER>("debug:fifo_pending_workaround");
 
-        //#TODO:
-        // this feels wrong, but if we have no pending frames, presented might never come because
-        // we are waiting on the barrier to unlock and no damage is around.
-        // unlock on timeout instead?
         if (!state->fifoScheduled)
             state->fifoScheduled = checkMonitors(*PPEND);
 
@@ -58,13 +99,27 @@ CFifoResource::CFifoResource(UP<CWpFifoV1>&& resource_, SP<CWLSurfaceResource> s
             return;
 
         // only lock once its mapped.
-        if (m_surface->m_mapped)
-            m_surface->m_stateQueue.lock(state, LOCK_REASON_FIFO);
+        if (!m_surface->m_mapped || state.expired())
+            return;
+
+        m_surface->m_stateQueue.lock(state, LOCK_REASON_FIFO);
+
+        const auto TRANSITION = m_watchdogState.lockedQueued(m_surface->m_mapped, state->fifoScheduled, false);
+        if (TRANSITION.armTimer)
+            scheduleBarrierClear();
+    });
+
+    m_listeners.surfaceUnmap   = m_surface->m_events.unmap.listen([this] { clearBarrier(Fifo::WATCHDOG_UNMAPPED); });
+    m_listeners.surfaceDestroy = m_surface->m_events.destroy.listen([this] {
+        clearBarrier(Fifo::WATCHDOG_DESTROYED);
+        m_surface.reset();
     });
 }
 
 CFifoResource::~CFifoResource() {
-    ;
+    clearBarrier(Fifo::WATCHDOG_DESTROYED);
+    if (m_barrierClearTimer)
+        m_barrierClearTimer->cancel();
 }
 
 bool CFifoResource::good() {
@@ -72,8 +127,80 @@ bool CFifoResource::good() {
 }
 
 void CFifoResource::presented() {
+    clearBarrier(Fifo::WATCHDOG_PRESENTED);
+}
+
+void CFifoResource::clearBarrier(Fifo::eWatchdogClearReason reason) {
+    const auto TRANSITION = m_watchdogState.clear(reason);
+
+    if (TRANSITION.cancelTimer && m_barrierClearTimer) {
+        if (g_pEventLoopManager)
+            m_barrierClearTimer->updateTimeout(std::nullopt);
+        else
+            m_barrierClearTimer->cancel();
+    }
+
+    if (!m_surface)
+        return;
+
     m_surface->m_current.barrierSet = false;
     m_surface->m_stateQueue.unlockFirst(LOCK_REASON_FIFO);
+}
+
+void CFifoResource::scheduleBarrierClear() {
+    if (!g_pEventLoopManager) {
+        clearBarrier(Fifo::WATCHDOG_EXPIRED);
+        return;
+    }
+
+    if (!m_barrierClearTimer) {
+        m_barrierClearTimer = makeShared<CEventLoopTimer>(
+            std::nullopt,
+            [this](SP<CEventLoopTimer> self, void* data) {
+                if (self)
+                    self->updateTimeout(std::nullopt);
+
+                LOGM(Log::WARN, "FIFO barrier watchdog expired, unlocking surface state");
+                clearBarrier(Fifo::WATCHDOG_EXPIRED);
+            },
+            nullptr);
+        g_pEventLoopManager->addTimer(m_barrierClearTimer);
+    }
+
+    m_barrierClearTimer->updateTimeout(std::chrono::milliseconds(barrierClearTimeoutMs()));
+}
+
+int CFifoResource::barrierClearTimeoutMs() {
+    std::vector<Fifo::SWatchdogOutput> outputs;
+
+    auto                               considerMonitor = [&](PHLMONITOR mon) {
+        if (!mon)
+            return;
+
+        outputs.emplace_back(Fifo::SWatchdogOutput{
+            .refreshRate = mon->m_refreshRate,
+            .enabled     = mon->m_enabled,
+            .tearing     = mon->m_tearingState.activelyTearing,
+        });
+    };
+
+    if (m_surface->m_enteredOutputs.empty() && m_surface->m_hlSurface) {
+        for (auto& m : State::monitorState()->monitors()) {
+            if (!m)
+                continue;
+
+            auto box = m_surface->m_hlSurface->getSurfaceBoxGlobal();
+            if (box && !box->intersection({m->m_position, m->m_size}).empty())
+                considerMonitor(m);
+        }
+    } else {
+        for (auto& m : m_surface->m_enteredOutputs) {
+            if (m)
+                considerMonitor(m.lock());
+        }
+    }
+
+    return Fifo::watchdogTimeoutMs(Fifo::slowestRelevantRefresh(outputs));
 }
 
 bool CFifoResource::checkMonitors(bool needsSchedule) {

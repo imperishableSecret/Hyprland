@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <span>
 #include <vector>
 #include <unordered_map>
 #include "WaylandProtocol.hpp"
@@ -8,6 +10,40 @@
 #include "../helpers/signal/Signal.hpp"
 
 class CWLSurfaceResource;
+class CEventLoopTimer;
+
+namespace Fifo {
+    struct SWatchdogOutput {
+        float refreshRate = 0.F;
+        bool  enabled     = false;
+        bool  tearing     = false;
+    };
+
+    enum eWatchdogClearReason : uint8_t {
+        WATCHDOG_PRESENTED = 0,
+        WATCHDOG_UNMAPPED,
+        WATCHDOG_DESTROYED,
+        WATCHDOG_EXPIRED,
+    };
+
+    struct SWatchdogTransition {
+        bool armTimer    = false;
+        bool cancelTimer = false;
+    };
+
+    class CWatchdogState {
+      public:
+        SWatchdogTransition lockedQueued(bool mapped, bool scheduled, bool tearing);
+        SWatchdogTransition clear(eWatchdogClearReason reason);
+        bool                armed() const;
+
+      private:
+        bool m_armed = false;
+    };
+
+    float slowestRelevantRefresh(std::span<const SWatchdogOutput> outputs, float fallbackRefreshRate = 60.F);
+    int   watchdogTimeoutMs(float refreshRate);
+}
 
 class CFifoResource {
   public:
@@ -24,9 +60,17 @@ class CFifoResource {
 
     struct {
         CHyprSignalListener surfaceStateCommit;
+        CHyprSignalListener surfaceUnmap;
+        CHyprSignalListener surfaceDestroy;
     } m_listeners;
 
-    bool checkMonitors(bool needsSchedule = false);
+    bool                 checkMonitors(bool needsSchedule = false);
+    void                 scheduleBarrierClear();
+    void                 clearBarrier(Fifo::eWatchdogClearReason reason);
+    int                  barrierClearTimeoutMs();
+
+    SP<CEventLoopTimer>  m_barrierClearTimer;
+    Fifo::CWatchdogState m_watchdogState;
 
     friend class CFifoProtocol;
     friend class CFifoManagerResource;
