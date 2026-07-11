@@ -232,7 +232,7 @@ void COverlay::draw() {
     bgData.box   = barBox;
     bgData.color = CHyprColor(0.06, 0.06, 0.06, opacity);
     bgData.round = sc<int>(std::round(m_radius));
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(std::move(bgData)));
+    g_pHyprRenderer->addPassElement<CRectPassElement>(std::move(bgData));
 
     CBorderPassElement::SBorderData borderData;
     borderData.box        = barBox;
@@ -241,7 +241,7 @@ void COverlay::draw() {
     borderData.outerRound = sc<int>(std::round(m_radius));
     borderData.borderSize = 2;
     borderData.a          = opacity;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(std::move(borderData)));
+    g_pHyprRenderer->addPassElement<CBorderPassElement>(std::move(borderData));
 
     if (m_textTexture) {
         CTexPassElement::SRenderData textData;
@@ -250,7 +250,7 @@ void COverlay::draw() {
         textData.a          = opacity;
         textData.clipRegion = CRegion(barBox.copy().expand(-1));
 
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(textData)));
+        g_pHyprRenderer->addPassElement<CTexPassElement>(std::move(textData));
     }
 }
 

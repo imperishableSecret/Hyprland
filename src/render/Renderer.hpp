@@ -13,6 +13,8 @@
 #include "./pass/BorderPassElement.hpp"
 #include "./pass/ClearPassElement.hpp"
 #include "./pass/FramebufferElement.hpp"
+#include "./pass/InnerGlowPassElement.hpp"
+#include "./pass/PreBlurElement.hpp"
 #include "./pass/RectPassElement.hpp"
 #include "./pass/RendererHintsPassElement.hpp"
 #include "./pass/ShadowPassElement.hpp"
@@ -133,9 +135,17 @@ namespace Render {
             std::string                                  name;
         } m_lastCursorData;
 
-        CRenderPass     m_renderPass;
+        CRenderPass m_renderPass;
 
-        void            addPassElement(UP<IPassElement>&& element);
+        void        addPassElement(UP<IPassElement>&& element);
+        template <typename T, typename... Args>
+            requires(std::same_as<T, CBorderPassElement> || std::same_as<T, CClearPassElement> || std::same_as<T, CFramebufferElement> || std::same_as<T, CInnerGlowPassElement> ||
+                     std::same_as<T, CPreBlurElement> || std::same_as<T, CRectPassElement> || std::same_as<T, CRendererHintsPassElement> || std::same_as<T, CShadowPassElement> ||
+                     std::same_as<T, CSurfacePassElement> || std::same_as<T, CTexPassElement> || std::same_as<T, CTextureMatteElement> ||
+                     std::same_as<T, CTransformedWindowPassElement>)
+        void addPassElement(Args&&... args) {
+            currentPass().emplace<T>(std::forward<Args>(args)...);
+        }
         CRenderPass&    currentPass();
         UP<CScopeGuard> redirectPass(CRenderPass* pass);
 

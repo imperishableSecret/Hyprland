@@ -188,7 +188,7 @@ void CHyprGroupBarDecoration::draw(PHLMONITOR pMonitor, float const& a) {
                     }
                 }
             }
-            g_pHyprRenderer->addPassElement(makeUnique<CRectPassElement>(rectdata));
+            g_pHyprRenderer->addPassElement<CRectPassElement>(rectdata);
         }
 
         rect = {ASSIGNEDBOX.x + xoff - pMonitor->m_position.x + m_window->m_floatingOffset.x,
@@ -223,7 +223,7 @@ void CHyprGroupBarDecoration::draw(PHLMONITOR pMonitor, float const& a) {
                             }
                         }
                     }
-                    g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(data));
+                    g_pHyprRenderer->addPassElement<CTexPassElement>(data);
                 }
             }
 
@@ -254,7 +254,7 @@ void CHyprGroupBarDecoration::draw(PHLMONITOR pMonitor, float const& a) {
                 data.tex = titleTex;
                 data.box = rect;
                 data.a   = a;
-                g_pHyprRenderer->addPassElement(makeUnique<CTexPassElement>(std::move(data)));
+                g_pHyprRenderer->addPassElement<CTexPassElement>(std::move(data));
             }
         }
 

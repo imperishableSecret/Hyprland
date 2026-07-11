@@ -286,6 +286,14 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
         roundingPower = 2.0f;
     }
 
+    const auto surfaceDamage = m_renderData.damage.copy().intersect(windowBox);
+    auto       visibleDamage = surfaceDamage.copy();
+    if (!clipRegion.empty())
+        visibleDamage.intersect(clipRegion);
+
+    if (visibleDamage.empty())
+        return;
+
     const bool WINDOWOPAQUE    = m_data.pWindow && m_data.pWindow->wlSurface()->resource() == m_data.surface ? m_data.pWindow->opaque() : false;
     const bool CANDISABLEBLEND = ALPHA >= 1.f && OVERALL_ALPHA >= 1.f && rounding <= 0 && WINDOWOPAQUE;
 
@@ -318,7 +326,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
                             .clipRegion            = clipRegion,
                             .currentLS             = m_data.pLS,
                         }),
-                        m_renderData.damage.copy().intersect(windowBox));
+                        surfaceDamage);
         else
             drawElement(makeShared<CTexPassElement>(CTexPassElement::SRenderData{
                             .tex            = TEXTURE,
@@ -336,7 +344,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
                             .clipRegion     = clipRegion,
                             .currentLS      = m_data.pLS,
                         }),
-                        m_renderData.damage.copy().intersect(windowBox));
+                        surfaceDamage);
     } else {
         if (BLUR && m_data.popup)
             drawElement(makeShared<CTexPassElement>(CTexPassElement::SRenderData{
@@ -358,7 +366,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
                             .clipRegion            = clipRegion,
                             .currentLS             = m_data.pLS,
                         }),
-                        m_renderData.damage.copy().intersect(windowBox));
+                        surfaceDamage);
         else
             drawElement(makeShared<CTexPassElement>(CTexPassElement::SRenderData{
                             .tex            = TEXTURE,
@@ -376,7 +384,7 @@ void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegio
                             .clipRegion     = clipRegion,
                             .currentLS      = m_data.pLS,
                         }),
-                        m_renderData.damage.copy().intersect(windowBox));
+                        surfaceDamage);
     }
 
     g_pHyprRenderer->blend(true);
