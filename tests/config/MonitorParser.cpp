@@ -217,6 +217,26 @@ TEST(Config, monitorParserVRR) {
     EXPECT_FALSE(p4.rule().m_vrr.has_value());
 }
 
+TEST(Config, monitorParserVrrMinHz) {
+    CMonitorRuleParser p1("DP-1");
+    EXPECT_TRUE(p1.parseVrrMinHz("48"));
+    EXPECT_EQ(p1.rule().m_vrrMinHz, 48);
+
+    CMonitorRuleParser p2("DP-1");
+    EXPECT_TRUE(p2.parseVrrMinHz("24"));
+    EXPECT_EQ(p2.rule().m_vrrMinHz, 24);
+
+    CMonitorRuleParser p3("DP-1");
+    EXPECT_FALSE(p3.parseVrrMinHz("abc"));
+    EXPECT_TRUE(p3.getError().has_value());
+    EXPECT_EQ(p3.rule().m_vrrMinHz, 24);
+
+    CMonitorRuleParser p4("DP-1");
+    EXPECT_FALSE(p4.parseVrrMinHz("0"));
+    EXPECT_TRUE(p4.getError().has_value());
+    EXPECT_EQ(p4.rule().m_vrrMinHz, 24);
+}
+
 TEST(Config, monitorParserSDRBrightness) {
     CMonitorRuleParser parser("DP-1");
     EXPECT_TRUE(parser.parseSDRBrightness("1.5"));

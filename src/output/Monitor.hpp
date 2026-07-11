@@ -105,6 +105,7 @@ namespace Monitor {
 
         bool                        m_dpmsStatus       = true;
         bool                        m_vrrActive        = false; // this can be TRUE even if VRR is not active in the case that this display does not support it.
+        int                         m_vrrMinHz         = 24;
         bool                        m_enabled10bit     = false; // as above, this can be TRUE even if 10 bit failed.
         NCMType::eCMType            m_cmType           = NCMType::CM_SRGB;
         NTransferFunction::eTF      m_sdrEotf          = NTransferFunction::TF_DEFAULT;

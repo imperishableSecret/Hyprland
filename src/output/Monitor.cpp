@@ -659,6 +659,7 @@ bool CMonitor::applyMonitorRuleSoft(Config::CMonitorRule&& pMonitorRule) {
     m_transform         = m_activeMonitorRule.m_transform;
     m_supportsWideColor = m_activeMonitorRule.m_supportsWideColor;
     m_supportsHDR       = m_activeMonitorRule.m_supportsHDR;
+    m_vrrMinHz          = m_activeMonitorRule.m_vrrMinHz;
 
     if (m_activeMonitorRule.m_iccFile.empty()) {
         // only apply explicit cm settings if we have no icc file
@@ -2112,12 +2113,10 @@ uint16_t CMonitor::isDSBlocked(bool full) {
 }
 
 bool CMonitor::isVrrKeepaliveDue() {
-    static auto PMINRR = CConfigValue<Config::INTEGER>("cursor:min_refresh_rate");
-
-    if (!m_output || !m_output->state->state().adaptiveSync || *PMINRR <= 0)
+    if (!m_output || !m_output->state->state().adaptiveSync || m_vrrMinHz <= 0)
         return false;
 
-    return m_lastPresentationTimer.getMillis() > 1000.0f / *PMINRR;
+    return m_lastPresentationTimer.getMillis() > 1000.0f / m_vrrMinHz;
 }
 
 bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer) {
