@@ -2084,6 +2084,16 @@ uint16_t CMonitor::isDSBlocked(bool full) {
         reasons |= DS_BLOCK_DMA;
         if (!full)
             return reasons;
+    } else {
+        auto& cache = m_cachedScanoutFormatCheck;
+        if (!cache.valid || cache.format != params.format || cache.modifier != params.modifier)
+            cache = {.format = params.format, .modifier = params.modifier, .ok = isFormatScanoutCapable(params.format, params.modifier), .valid = true};
+
+        if (!cache.ok) {
+            reasons |= DS_BLOCK_FORMAT;
+            if (!full)
+                return reasons;
+        }
     }
 
     const bool surfaceIsHDR   = PSURFACE->m_colorManagement.valid() && PSURFACE->m_colorManagement->isHDR();
@@ -2192,8 +2202,13 @@ bool CMonitor::attemptDirectScanout() {
 
     if (NEEDS_TEST && !m_state.test()) {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed basic test");
+        if (!isFormatScanoutCapable(params.format, params.modifier))
+            m_cachedScanoutFormatCheck = {.format = params.format, .modifier = params.modifier, .ok = false, .valid = true};
         return false;
     }
+
+    if (NEEDS_TEST)
+        m_cachedScanoutFormatCheck = {.format = params.format, .modifier = params.modifier, .ok = true, .valid = true};
 
     PSURFACE->presentFeedback(Time::steadyNow(), m_self.lock());
 
@@ -2247,6 +2262,7 @@ bool CMonitor::attemptDirectScanout() {
 void CMonitor::handleDSleave() {
     Log::logger->log(Log::DEBUG, "Left a direct scanout.");
     m_lastScanout.reset();
+    invalidateScanoutFormatCache();
     m_previousFSWindow.reset(); // recalc fs settings
     m_directScanoutIsActive = false;
 
@@ -2264,6 +2280,24 @@ void CMonitor::handleDSleave() {
 
 bool CMonitor::canAttemptDirectScanoutFast() const {
     return !m_solitaryClient.expired() || !m_lastScanout.expired() || m_directScanoutIsActive;
+}
+
+bool CMonitor::isFormatScanoutCapable(uint32_t format, uint64_t modifier) {
+    if (!m_output)
+        return false;
+
+    const auto& renderFormats = m_output->getRenderFormats();
+    for (const auto& fmt : renderFormats) {
+        if (fmt.drmFormat != format)
+            continue;
+
+        for (const auto& mod : fmt.modifiers) {
+            if (mod == modifier)
+                return true;
+        }
+    }
+
+    return false;
 }
 
 bool CMonitor::isMultiGPU() {
