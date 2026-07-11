@@ -38,6 +38,7 @@
 #include "../helpers/CursorShapes.hpp"
 #include "../helpers/MainLoopExecutor.hpp"
 #include "../output/Monitor.hpp"
+#include "../output/MonitorFrameScheduler.hpp"
 #include "../state/MonitorState.hpp"
 #include "../state/WorkspaceState.hpp"
 #include "macros.hpp"
@@ -202,7 +203,7 @@ IHyprRenderer::IHyprRenderer() {
 
                 w->wlSurface()->resource()->breadthfirst(
                     [](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) {
-                        surf->m_stateQueue.unlockFirst(LOCK_REASON_FENCE | LOCK_REASON_FIFO | LOCK_REASON_TIMER);
+                        surf->m_stateQueue.unlockFirst(LOCK_REASON_FENCE | LOCK_REASON_FIFO);
                         surf->presentFeedback(Time::steadyNow(), Desktop::focusState()->monitor(), true);
                     },
                     nullptr);
@@ -2120,7 +2121,17 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
         return {};
 
-    const auto CAPTURE_STATE = Screenshare::mgr()->outputCopyFBState(pMonitor);
+    const auto RENDER_GENERATION = pMonitor->m_frameScheduler ? pMonitor->m_frameScheduler->renderGeneration() : 0;
+    const auto SUBMISSION_ID     = pMonitor->m_frameSubmissions.begin();
+    Log::logger->log(Log::TRACE, "renderer: output {} began staged submission {} for render generation {}, deferred commit: {}", pMonitor->m_name, SUBMISSION_ID, RENDER_GENERATION,
+                     !commit);
+    bool        preserveStagedSubmission = false;
+    CScopeGuard submissionGuard([&] {
+        if (!preserveStagedSubmission)
+            pMonitor->m_frameSubmissions.abort();
+    });
+
+    const auto  CAPTURE_STATE = Screenshare::mgr()->outputCopyFBState(pMonitor);
 
     m_renderData.pMonitor                  = pMonitor;
     m_renderData.outputNeedsCopyFB         = !pMonitor->m_mirrors.empty() || CAPTURE_STATE.needsCopyFB();
@@ -2132,7 +2143,7 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();
-    const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast();
+    const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast() && !pMonitor->isDSBlocked();
 
     // Prepare output state before either scanout path can commit it. When a
     // speculative scanout fails, restore the composited state below.
@@ -2145,9 +2156,13 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
             if (!pMonitor->m_directScanoutIsActive)
                 pMonitor->m_directScanoutIsActive = true;
+            preserveStagedSubmission = true;
             return {};
         } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive)
             pMonitor->handleDSleave();
+
+        if (!pMonitor->m_frameSubmissions.hasStagedSubmission())
+            pMonitor->m_frameSubmissions.begin();
 
         pMonitor->m_previousFSWindow.reset();
         handleFullscreenSettings(pMonitor, false);
@@ -2368,8 +2383,11 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     if (pMonitor->m_output->state->state().presentationMode != presentationMode)
         pMonitor->m_output->state->setPresentationMode(presentationMode);
 
+    bool commitSucceeded = true;
     if (commit)
-        commitPendingAndDoExplicitSync(pMonitor);
+        commitSucceeded = commitPendingAndDoExplicitSync(pMonitor);
+
+    preserveStagedSubmission = !commit || commitSucceeded;
 
     if (shouldTear)
         pMonitor->m_tearingState.busy = true;
@@ -2619,6 +2637,7 @@ bool IHyprRenderer::commitPendingAndDoExplicitSync(PHLMONITOR pMonitor) {
             // displayed
             pMonitor->m_output->swapchain->rollback();
             pMonitor->m_damage.damageEntire();
+            pMonitor->m_frameSubmissions.abort();
         }
     }
 

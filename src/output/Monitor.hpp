@@ -27,6 +27,7 @@
 #include "../helpers/signal/Signal.hpp"
 #include "DamageRing.hpp"
 #include "ScanoutTestCache.hpp"
+#include "FrameSubmission.hpp"
 #include <aquamarine/output/Output.hpp>
 #include <aquamarine/allocator/Swapchain.hpp>
 #include <hyprutils/os/FileDescriptor.hpp>
@@ -37,6 +38,7 @@
 
 class CSyncTimeline;
 class CEventLoopTimer;
+class IHLBuffer;
 
 namespace Monitor {
     class CMonitorResources;
@@ -124,6 +126,7 @@ namespace Monitor {
 
         bool                        m_ratsScheduled = false;
         CTimer                      m_lastPresentationTimer;
+        Time::steady_tp             m_lastPresentationTime;
 
         bool                        m_isBeingLeased = false;
 
@@ -162,9 +165,10 @@ namespace Monitor {
             bool     valid    = false;
         } m_cachedScanoutFormatCheck;
 
-        CScanoutTestCache m_scanoutTestCache;
+        CScanoutTestCache      m_scanoutTestCache;
+        CFrameSubmissionLedger m_frameSubmissions;
 
-        void              invalidateScanoutFormatCache();
+        void                   invalidateScanoutFormatCache();
 
         // for special fade/blur
         PHLANIMVAR<float> m_specialFade;
@@ -274,6 +278,7 @@ namespace Monitor {
         void         onConnect(bool noRule);
         void         onDisconnect(bool destroy = false);
         void         applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSdrEotf);
+        void         invalidatePresentationTiming();
         void         addDamage(const pixman_region32_t* rg);
         void         addDamage(const CRegion& rg);
         void         addDamage(const CBox& box);
@@ -403,6 +408,8 @@ namespace Monitor {
         WP<Monitor::CMonitorResources>      resources();
 
       private:
+        friend class CMonitorState;
+
         void                    updateMatrix();
         Mat3x3                  m_projMatrix;
         Mat3x3                  m_projOutputMatrix;

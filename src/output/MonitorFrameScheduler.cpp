@@ -4,12 +4,17 @@
 #include "../Compositor.hpp"
 #include "../render/Renderer.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
+#include "../protocols/CommitTiming.hpp"
 
 using namespace Render::GL;
 using namespace Monitor;
 
 CMonitorFrameScheduler::CMonitorFrameScheduler(PHLMONITOR m) : m_monitor(m) {
     ;
+}
+
+uint64_t CMonitorFrameScheduler::renderGeneration() const {
+    return m_renderGeneration;
 }
 
 bool CMonitorFrameScheduler::newSchedulingEnabled() {
@@ -46,6 +51,9 @@ void CMonitorFrameScheduler::onSyncFired() {
     // FIXME: this is horrible. "renderMonitor" should not be able to do that.
     auto self = m_self;
 
+    if (PROTO::commitTiming)
+        PROTO::commitTiming->onMonitorFrame(PMONITOR, true);
+
     auto renderCompletionFence = g_pHyprRenderer->renderMonitor(PMONITOR, false);
 
     if (!self)
@@ -74,13 +82,14 @@ void CMonitorFrameScheduler::onPresented() {
         if (!m || !m->m_output)
             return;
 
-        auto ml = m.lock();
-
         const auto SCHEDULER = scheduler.lock();
         if (!SCHEDULER || SCHEDULER->m_renderGeneration != commitGeneration || !SCHEDULER->newSchedulingEnabled()) {
-            Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> skipping stale pending commit.", ml->m_name);
+            Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> skipping stale pending commit.", m->m_name);
+            m->m_frameSubmissions.abort();
             return;
         }
+
+        auto ml = m.lock();
 
         g_pHyprRenderer->commitPendingAndDoExplicitSync(ml); // commit the pending frame. If it didn't fire yet (is not rendered) it doesn't matter. Syncs will wait.
 
@@ -109,6 +118,8 @@ void CMonitorFrameScheduler::onFrame() {
     }
 
     if (!newSchedulingEnabled()) {
+        if (PROTO::commitTiming)
+            PROTO::commitTiming->onMonitorFrame(PMONITOR, false);
         g_pHyprRenderer->renderMonitor(PMONITOR);
         return;
     }
@@ -119,6 +130,9 @@ void CMonitorFrameScheduler::onFrame() {
     }
 
     Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> frame event, render = true, rendering normally.", PMONITOR->m_name);
+
+    if (PROTO::commitTiming)
+        PROTO::commitTiming->onMonitorFrame(PMONITOR, false);
 
     m_lastRenderBegun = hrc::now();
     ++m_renderGeneration;

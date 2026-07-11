@@ -196,7 +196,12 @@ void CMonitorRuleManager::ensureVRR(PHLMONITOR pMonitor) {
         if (!m->m_output || m->m_createdByUser)
             return;
 
-        const auto USEVRR = m->m_activeMonitorRule.m_vrr.has_value() ? m->m_activeMonitorRule.m_vrr.value() : *PVRR;
+        const auto WAS_ADAPTIVE              = m->m_output->state->state().adaptiveSync;
+        const auto USEVRR                    = m->m_activeMonitorRule.m_vrr.has_value() ? m->m_activeMonitorRule.m_vrr.value() : *PVRR;
+        auto       invalidateTimingIfChanged = [&] {
+            if (WAS_ADAPTIVE != m->m_output->state->state().adaptiveSync)
+                m->invalidatePresentationTiming();
+        };
 
         if (USEVRR == 0) {
             if (m->m_vrrActive) {
@@ -207,6 +212,7 @@ void CMonitorRuleManager::ensureVRR(PHLMONITOR pMonitor) {
                     Log::logger->log(Log::ERR, "Couldn't commit output {} in ensureVRR -> false", m->m_output->name);
             }
             m->m_vrrActive = false;
+            invalidateTimingIfChanged();
             return;
         }
 
@@ -241,6 +247,7 @@ void CMonitorRuleManager::ensureVRR(PHLMONITOR pMonitor) {
                 }
                 m->m_vrrActive = false;
             }
+            invalidateTimingIfChanged();
             return;
         } else if (USEVRR == 2 || USEVRR == 3) {
 
@@ -271,6 +278,7 @@ void CMonitorRuleManager::ensureVRR(PHLMONITOR pMonitor) {
                 m->m_output->state->setAdaptiveSync(false);
             }
         }
+        invalidateTimingIfChanged();
     };
 
     if (pMonitor) {

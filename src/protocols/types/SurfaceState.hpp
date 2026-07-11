@@ -11,6 +11,8 @@ namespace Render {
 }
 class CDRMSyncPointState;
 class CWLCallbackResource;
+class CPresentationFeedbackBatch;
+class CFifoResource;
 
 enum eLockReason : uint8_t {
     LOCK_REASON_NONE  = 0,
@@ -38,6 +40,8 @@ inline eLockReason operator~(eLockReason a) {
 }
 
 struct SSurfaceState {
+    ~SSurfaceState();
+
     union {
         uint16_t all = 0;
         struct {
@@ -95,13 +99,20 @@ struct SSurfaceState {
     void                 updateSynchronousTexture(SP<Render::ITexture> lastTexture);
 
     // fifo
-    bool barrierSet    = false;
-    bool surfaceLocked = false;
-    bool fifoScheduled = false;
+    bool              barrierSet    = false;
+    bool              surfaceLocked = false;
+    bool              fifoScheduled = false;
+    uint64_t          barrierEpoch  = 0;
+    uint64_t          fifoWaitEpoch = 0;
+    SP<CFifoResource> fifoBarrierOwner;
+    SP<CFifoResource> fifoWaitOwner;
+
+    // presentation-time protocol feedback owned by this surface commit
+    SP<CPresentationFeedbackBatch> presentationFeedback;
 
     // commit timing
-    std::optional<Time::steady_dur> pendingTimeout;
-    SP<CEventLoopTimer>             timer;
+    std::optional<Time::steady_tp> commitTarget;
+    SP<CEventLoopTimer>            timer;
 
     // helpers
     CRegion accumulateBufferDamage();       // transforms state.damage and merges it into state.bufferDamage

@@ -1,8 +1,12 @@
 #include "SurfaceState.hpp"
 #include "helpers/Format.hpp"
 #include "protocols/types/Buffer.hpp"
+#include "protocols/Fifo.hpp"
 #include "render/Renderer.hpp"
 #include "render/Texture.hpp"
+#include "protocols/PresentationTime.hpp"
+
+SSurfaceState::~SSurfaceState() = default;
 
 Vector2D SSurfaceState::sourceSize() {
     if UNLIKELY (!texture)
@@ -78,8 +82,14 @@ void SSurfaceState::reset() {
     barrierSet    = false;
     surfaceLocked = false;
     fifoScheduled = false;
+    barrierEpoch  = 0;
+    fifoWaitEpoch = 0;
+    fifoBarrierOwner.reset();
+    fifoWaitOwner.reset();
 
-    pendingTimeout.reset();
+    presentationFeedback.reset();
+
+    commitTarget.reset();
     timer.reset(); // CEventLoopManager::nudgeTimers should handle it eventually
 }
 
@@ -133,6 +143,9 @@ void SSurfaceState::updateFrom(SSurfaceState& ref) {
         ref.callbacks.clear();
     }
 
-    if (ref.barrierSet)
-        barrierSet = ref.barrierSet;
+    if (ref.barrierSet) {
+        barrierSet       = ref.barrierSet;
+        barrierEpoch     = ref.barrierEpoch;
+        fifoBarrierOwner = ref.fifoBarrierOwner;
+    }
 }

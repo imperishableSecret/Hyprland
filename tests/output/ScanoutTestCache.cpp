@@ -107,8 +107,9 @@ TEST(ScanoutTestCache, invalidatesEveryTrackedAtomicConstraint) {
 }
 
 TEST(ScanoutTestCache, sameBufferCommitsPendingOutputState) {
-    EXPECT_FALSE(sameBufferScanoutNeedsCommit(false, false, false));
-    EXPECT_TRUE(sameBufferScanoutNeedsCommit(false, false, true));
-    EXPECT_TRUE(sameBufferScanoutNeedsCommit(true, false, false));
-    EXPECT_TRUE(sameBufferScanoutNeedsCommit(false, true, false));
+    EXPECT_FALSE(sameBufferScanoutNeedsCommit(false, false, false, false));
+    EXPECT_TRUE(sameBufferScanoutNeedsCommit(false, false, true, false));
+    EXPECT_TRUE(sameBufferScanoutNeedsCommit(true, false, false, false));
+    EXPECT_TRUE(sameBufferScanoutNeedsCommit(false, true, false, false));
+    EXPECT_TRUE(sameBufferScanoutNeedsCommit(false, false, false, true));
 }

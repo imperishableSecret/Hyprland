@@ -5,11 +5,25 @@
 CSurfaceStateQueue::CSurfaceStateQueue(WP<CWLSurfaceResource> surf) : m_surface(std::move(surf)) {}
 
 void CSurfaceStateQueue::clear() {
-    m_queue.clear();
+    while (!m_queue.empty()) {
+        const WP<SSurfaceState> STATE = m_queue.front();
+        if (m_surface)
+            m_surface->m_events.stateDiscarded.emit(STATE);
+        m_queue.pop_front();
+    }
 }
 
 WP<SSurfaceState> CSurfaceStateQueue::enqueue(UP<SSurfaceState>&& state) {
     return m_queue.emplace_back(std::move(state));
+}
+
+WP<SSurfaceState> CSurfaceStateQueue::latestFifoBarrier() const {
+    for (auto state = m_queue.rbegin(); state != m_queue.rend(); ++state) {
+        if ((*state)->barrierSet && (*state)->fifoBarrierOwner)
+            return WP<SSurfaceState>{*state};
+    }
+
+    return {};
 }
 
 void CSurfaceStateQueue::dropState(const WP<SSurfaceState>& state) {
@@ -17,6 +31,8 @@ void CSurfaceStateQueue::dropState(const WP<SSurfaceState>& state) {
     if (it == m_queue.end())
         return;
 
+    if (m_surface)
+        m_surface->m_events.stateDiscarded.emit(*it);
     m_queue.erase(it);
 }
 
@@ -66,15 +82,17 @@ auto CSurfaceStateQueue::find(const WP<SSurfaceState>& state) -> std::deque<UP<S
 }
 
 void CSurfaceStateQueue::tryProcess() {
+    const auto SURFACE = m_surface.lock();
+    if (!SURFACE)
+        return;
+
     while (!m_queue.empty()) {
         auto& front = m_queue.front();
-        if (front->lockMask & LOCK_REASON_FIFO && !m_surface->m_current.barrierSet)
-            front->lockMask &= ~LOCK_REASON_FIFO;
-
         if (front->lockMask != LOCK_REASON_NONE)
             return;
 
-        m_surface->commitState(*front);
+        SURFACE->commitState(*front);
+        SURFACE->m_events.stateApplied.emit(front);
         m_queue.pop_front();
     }
 }

@@ -14,6 +14,6 @@ void CScanoutTestCache::invalidate() {
     m_acceptedState.reset();
 }
 
-bool Monitor::sameBufferScanoutNeedsCommit(bool cursorCommitDue, bool vrrKeepaliveDue, bool outputStateCommitDue) {
-    return cursorCommitDue || vrrKeepaliveDue || outputStateCommitDue;
+bool Monitor::sameBufferScanoutNeedsCommit(bool cursorCommitDue, bool vrrKeepaliveDue, bool outputStateCommitDue, bool protocolCompletionDue) {
+    return cursorCommitDue || vrrKeepaliveDue || outputStateCommitDue || protocolCompletionDue;
 }

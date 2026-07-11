@@ -10,6 +10,8 @@
 #include "../Viewporter.hpp"
 #include "../../output/Monitor.hpp"
 #include "../PresentationTime.hpp"
+#include "../Fifo.hpp"
+#include "../CommitTiming.hpp"
 #include "../DRMSyncobj.hpp"
 #include "../types/DMABuffer.hpp"
 #include "../../render/Renderer.hpp"
@@ -180,6 +182,9 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : m_resource(re
             m_stateQueue.dropState(state);
             return;
         }
+
+        if (PROTO::commitTiming)
+            PROTO::commitTiming->onSurfaceStateCommitted(m_self.lock(), state);
 
         scheduleState(state);
     });
@@ -604,11 +609,13 @@ void CWLSurfaceResource::commitState(SSurfaceState& state) {
     // wl_surface#3.commit()
     // wp_fifo_v1#43.wait_barrier()
     // wl_surface#3.commit()
-    if (!state.updated.all && m_mapped && state.fifoScheduled)
+    if (!state.updated.all && m_mapped && state.fifoScheduled && !state.presentationFeedback)
         return;
 
     auto lastTexture = m_current.texture;
+    m_current.presentationFeedback.reset();
     m_current.updateFrom(state);
+    m_current.presentationFeedback = std::move(state.presentationFeedback);
 
     if (m_current.buffer) {
         if (m_current.buffer->isSynchronous())
@@ -732,6 +739,47 @@ bool CWLSurfaceResource::isTearing() {
     return false;
 }
 
+PHLMONITOR CWLSurfaceResource::timingMainOutput() {
+    const auto SURFACE_BOX = m_hlSurface ? m_hlSurface->getSurfaceBoxGlobal() : std::nullopt;
+    const auto PREVIOUS    = m_timingMainOutput.lock();
+    PHLMONITOR best;
+    double     bestArea = -1.0;
+
+    auto       consider = [&](PHLMONITOR monitor) {
+        if (!monitor || !monitor->m_enabled || !monitor->m_dpmsStatus)
+            return;
+
+        double area = 0.0;
+        if (SURFACE_BOX) {
+            const auto INTERSECTION = SURFACE_BOX->intersection({monitor->m_position, monitor->m_size});
+            area                    = INTERSECTION.width * INTERSECTION.height;
+        }
+
+        if (area > bestArea || (area == bestArea && monitor == PREVIOUS)) {
+            best     = monitor;
+            bestArea = area;
+        }
+    };
+
+    for (const auto& weakMonitor : m_enteredOutputs)
+        consider(weakMonitor.lock());
+
+    if (!best && SURFACE_BOX) {
+        for (const auto& monitor : State::monitorState()->monitors()) {
+            if (monitor && !SURFACE_BOX->intersection({monitor->m_position, monitor->m_size}).empty())
+                consider(monitor);
+        }
+    }
+
+    if (!best) {
+        m_timingMainOutput.reset();
+        return nullptr;
+    }
+
+    m_timingMainOutput = best;
+    return best;
+}
+
 void CWLSurfaceResource::updateCursorShm(CRegion damage) {
     if (damage.empty())
         return;
@@ -776,19 +824,22 @@ void CWLSurfaceResource::updateCursorShm(CRegion damage) {
 void CWLSurfaceResource::presentFeedback(const Time::steady_tp& when, PHLMONITOR pMonitor, bool discarded) {
     frame(when);
 
-    auto FEEDBACK = makeUnique<CQueuedPresentationData>(m_self.lock());
-    FEEDBACK->attachMonitor(pMonitor);
-    if (discarded)
-        FEEDBACK->discarded();
-    else {
-        FEEDBACK->presented();
-        if (!pMonitor->m_lastScanout.expired()) {
-            const auto WINDOW = m_hlSurface ? Desktop::View::CWindow::fromView(m_hlSurface->view()) : nullptr;
-            if (WINDOW == pMonitor->m_lastScanout)
-                FEEDBACK->setPresentationType(true);
-        }
+    if (discarded) {
+        m_current.presentationFeedback.reset();
+        return;
     }
-    PROTO::presentation->queueData(std::move(FEEDBACK));
+
+    if (!pMonitor || timingMainOutput() != pMonitor)
+        return;
+
+    if (m_current.presentationFeedback) {
+        auto feedback = std::move(m_current.presentationFeedback);
+        feedback->attachMonitor(pMonitor);
+        pMonitor->m_frameSubmissions.attach(std::move(feedback));
+    }
+
+    if (const auto FIFO = m_current.fifoBarrierOwner)
+        FIFO->stageForOutput(pMonitor);
 }
 
 CWLCompositorResource::CWLCompositorResource(SP<CWlCompositor> resource_) : m_resource(resource_) {

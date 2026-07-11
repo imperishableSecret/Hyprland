@@ -22,6 +22,7 @@ namespace Monitor {
         void                    onSyncFired();
         void                    onPresented();
         void                    onFrame();
+        uint64_t                renderGeneration() const;
 
       private:
         bool                       canRender();

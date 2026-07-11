@@ -13,6 +13,7 @@ class CSurfaceStateQueue {
 
     void              clear();
     WP<SSurfaceState> enqueue(UP<SSurfaceState>&& state);
+    WP<SSurfaceState> latestFifoBarrier() const;
     void              dropState(const WP<SSurfaceState>& state);
     void              lock(const WP<SSurfaceState>& state, eLockReason reason);
     void              unlock(const WP<SSurfaceState>& state, eLockReason reason);

@@ -13,9 +13,9 @@
 #include "../protocols/GammaControl.hpp"
 #include "../protocols/LayerShell.hpp"
 #include "../protocols/PresentationTime.hpp"
+#include "../protocols/CommitTiming.hpp"
 #include "../protocols/DRMLease.hpp"
 #include "../protocols/DRMSyncobj.hpp"
-#include "../protocols/Fifo.hpp"
 #include "../protocols/core/Output.hpp"
 #include "../protocols/Screencopy.hpp"
 #include "../protocols/ToplevelExport.hpp"
@@ -107,6 +107,7 @@ CMonitor::~CMonitor() {
 }
 
 void CMonitor::onConnect(bool noRule) {
+    invalidatePresentationTiming();
     Event::bus()->m_events.monitor.preAdded.emit(m_self.lock());
     CScopeGuard x = {[]() { State::monitorLayoutController()->arrange(); }};
 
@@ -156,12 +157,24 @@ void CMonitor::onConnect(bool noRule) {
             ts = nullptr;
         }
 
+        timespec when{};
+        uint32_t flags = event.flags;
         if (!ts) {
-            timespec mono{};
-            clock_gettime(CLOCK_MONOTONIC, &mono);
-            PROTO::presentation->onPresented(m_self.lock(), mono, event.refresh, event.seq, event.flags & ~Aquamarine::IOutput::AQ_OUTPUT_PRESENT_HW_CLOCK);
+            clock_gettime(CLOCK_MONOTONIC, &when);
+            flags &= ~Aquamarine::IOutput::AQ_OUTPUT_PRESENT_HW_CLOCK;
         } else
-            PROTO::presentation->onPresented(m_self.lock(), *ts, event.refresh, event.seq, event.flags);
+            when = *ts;
+
+        const auto SUBMISSION_ID = m_frameSubmissions.presentationTargetID();
+        const bool MATCHED       = m_frameSubmissions.complete({
+            .presented = event.presented,
+            .when      = when,
+            .refresh   = event.refresh,
+            .sequence  = event.seq,
+            .flags     = flags,
+        });
+        Log::logger->log(Log::TRACE, "output {} presentation: submission {}, matched: {}, presented: {}, sequence: {}, refresh: {}, flags: {:x}", m_name, SUBMISSION_ID, MATCHED,
+                         event.presented, event.seq, event.refresh, flags);
 
         if (m_zoomAnimFrameCounter < 5) {
             m_zoomAnimFrameCounter++;
@@ -196,8 +209,14 @@ void CMonitor::onConnect(bool noRule) {
                 g_pHyprRenderer->sendFrameEventsToWorkspace(mon, m_activeSpecialWorkspace, NOW);
         }
 
-        m_frameScheduler->onPresented();
-        m_lastPresentationTimer.reset();
+        if (event.presented) {
+            m_lastPresentationTime = Time::steadyNow() + Time::till(when);
+            m_frameScheduler->onPresented();
+            m_lastPresentationTimer.reset();
+        } else {
+            invalidatePresentationTiming();
+            m_frameSubmissions.abort();
+        }
 
         m_events.presented.emit();
     });
@@ -392,6 +411,7 @@ void CMonitor::onConnect(bool noRule) {
 }
 
 void CMonitor::onDisconnect(bool destroy) {
+    m_frameSubmissions.discardAll();
     Event::bus()->m_events.monitor.preRemoved.emit(m_self.lock());
     CScopeGuard x = {[this]() {
         if (g_pCompositor->m_isShuttingDown)
@@ -463,6 +483,7 @@ void CMonitor::onDisconnect(bool destroy) {
 
     m_enabled             = false;
     m_renderingInitPassed = false;
+    invalidatePresentationTiming();
 
     std::vector<PHLWORKSPACE> wspToMove;
     for (auto const& w : State::workspaceState()->workspaces()) {
@@ -654,6 +675,12 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSdr
     }
 }
 
+void CMonitor::invalidatePresentationTiming() {
+    m_lastPresentationTime = {};
+    if (PROTO::commitTiming)
+        PROTO::commitTiming->onMonitorTimingInvalidated(m_self.lock());
+}
+
 bool CMonitor::applyMonitorRuleSoft(Config::CMonitorRule&& pMonitorRule) {
     m_activeMonitorRule = std::move(pMonitorRule);
     m_reservedArea.setStatic(m_activeMonitorRule.m_reservedArea);
@@ -743,6 +770,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule) {
         if (!m_state.commit())
             Log::logger->log(Log::WARN, "state.commit() failed in CMonitor::applyMonitorRule");
 
+        invalidatePresentationTiming();
         m_events.modeChanged.emit();
 
         return true;
@@ -1081,6 +1109,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule) {
     Log::logger->log(Log::DEBUG, "Monitor {} data dump: res {:X}@{:.2f}Hz, scale {:.2f}, transform {}, pos {:X}, 10b {}", m_name, m_pixelSize, m_refreshRate, m_scale,
                      sc<int>(m_transform), m_position, sc<int>(m_enabled10bit));
 
+    invalidatePresentationTiming();
     m_events.modeChanged.emit();
 
     return true;
@@ -1427,6 +1456,7 @@ void CMonitor::setMirror(const std::string& mirrorOf) {
         Pointer::mgr()->lockSoftwareForMonitor(PMIRRORMON);
     }
 
+    invalidatePresentationTiming();
     m_events.modeChanged.emit();
     Event::bus()->m_events.monitor.layoutChanged.emit();
 }
@@ -2025,8 +2055,11 @@ void CMonitor::updateSurfaceScaleTransformDetails() {
 }
 
 bool CMonitor::updateTearing() {
+    const bool WAS_TEARING         = m_tearingState.activelyTearing;
     m_tearingState.activelyTearing = !isTearingBlocked();
     m_tearingState.nextRenderTorn  = false;
+    if (WAS_TEARING != m_tearingState.activelyTearing)
+        invalidatePresentationTiming();
     return m_tearingState.activelyTearing;
 }
 
@@ -2208,15 +2241,14 @@ SScanoutTestState CMonitor::scanoutTestState(SP<IHLBuffer> buffer) const {
 }
 
 bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer) {
-    static const auto PSAMEFIFO = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer_fifo");
-
     surface->presentFeedback(Time::steadyNow(), m_self.lock());
 
-    const bool cursorCommitDue      = m_scanoutNeedsCursorUpdate && !shouldSuppressCursorCommit();
-    const bool vrrKeepaliveDue      = isVrrKeepaliveDue();
-    const bool outputStateCommitDue = m_output->state->state().committed != 0;
+    const bool cursorCommitDue       = m_scanoutNeedsCursorUpdate && !shouldSuppressCursorCommit();
+    const bool vrrKeepaliveDue       = isVrrKeepaliveDue();
+    const bool outputStateCommitDue  = m_output->state->state().committed != 0;
+    const bool protocolCompletionDue = m_frameSubmissions.hasStagedWork();
 
-    if (sameBufferScanoutNeedsCommit(cursorCommitDue, vrrKeepaliveDue, outputStateCommitDue)) {
+    if (sameBufferScanoutNeedsCommit(cursorCommitDue, vrrKeepaliveDue, outputStateCommitDue, protocolCompletionDue)) {
         m_output->state->setBuffer(buffer);
         const auto TEST_STATE = scanoutTestState(buffer);
         const bool NEEDS_TEST = !m_scanoutTestCache.canSkip(TEST_STATE, outputStateCommitDue, m_scanoutNeedsCursorUpdate);
@@ -2228,7 +2260,10 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
             return false;
         }
 
-        const bool committed = m_output->commit();
+        const auto WORK_COUNT    = m_frameSubmissions.stagedWorkCount();
+        const auto SUBMISSION_ID = m_frameSubmissions.beginCommit(true);
+        const bool committed     = m_output->commit();
+        m_frameSubmissions.finishCommit(committed);
         if (!committed) {
             Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursorCommitDue: {}, vrrKeepaliveDue: {}, outputStateCommitDue: {}", cursorCommitDue,
                              vrrKeepaliveDue, outputStateCommitDue);
@@ -2237,16 +2272,13 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
             return false;
         }
 
+        Log::logger->log(Log::TRACE, "output {} same-buffer scanout submitted as {} with {} protocol work items", m_name, SUBMISSION_ID, WORK_COUNT);
         m_scanoutTestCache.accept(TEST_STATE);
         m_scanoutNeedsCursorUpdate = false;
         return true;
     }
 
-    if (surface->m_fifo && !m_tearingState.activelyTearing && *PSAMEFIFO) {
-        if (const auto fifo = surface->m_fifo.lock())
-            fifo->presented();
-    }
-
+    m_frameSubmissions.abort();
     return true;
 }
 
@@ -2333,7 +2365,9 @@ bool CMonitor::attemptDirectScanout() {
 
     // no need to do explicit sync here as surface current can only ever be ready to read
 
-    bool ok = m_output->commit();
+    const auto SUBMISSION_ID = m_frameSubmissions.beginCommit(true);
+    bool       ok            = m_output->commit();
+    m_frameSubmissions.finishCommit(ok);
 
     if (!ok) {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed to scanout surface");
@@ -2342,6 +2376,7 @@ bool CMonitor::attemptDirectScanout() {
         return false;
     }
 
+    Log::logger->log(Log::TRACE, "output {} direct scanout submitted as {}", m_name, SUBMISSION_ID);
     scanoutCommitted = true;
     m_scanoutTestCache.accept(scanoutTestState(PBUFFER));
 
@@ -2388,6 +2423,10 @@ void CMonitor::handleDSleave() {
 
 bool CMonitor::canAttemptDirectScanoutFast() const {
     return !m_solitaryClient.expired() || !m_lastScanout.expired() || m_directScanoutIsActive;
+}
+
+void CMonitor::invalidateScanoutFormatCache() {
+    m_cachedScanoutFormatCheck.valid = false;
 }
 
 bool CMonitor::isFormatScanoutCapable(uint32_t format, uint64_t modifier) {
@@ -2478,6 +2517,7 @@ void CMonitor::setDPMS(bool on) {
         return;
 
     m_dpmsStatus = on;
+    invalidatePresentationTiming();
     m_events.dpmsChanged.emit();
 
     if (on) {
@@ -2821,10 +2861,25 @@ bool CMonitorState::commit() {
 
     ensureBufferPresent();
 
-    if (m_owner->m_output->state->state().committed == 0)
+    if (m_owner->m_output->state->state().committed == 0) {
+        m_owner->m_frameSubmissions.abort();
         return true;
+    }
+
+    const auto& STATE          = m_owner->m_output->state->state();
+    const auto  BUFFER         = STATE.buffer;
+    const bool  BUFFER_BEARING = STATE.committed & Aquamarine::COutputState::AQ_OUTPUT_STATE_BUFFER;
+    const bool  ENABLED        = STATE.enabled;
+
+    const bool  TRACK_SUBMISSION = BUFFER_BEARING && BUFFER && ENABLED;
+    uint64_t    SUBMISSION_ID    = m_owner->m_frameSubmissions.stagedID();
+    if (TRACK_SUBMISSION)
+        SUBMISSION_ID = m_owner->m_frameSubmissions.beginCommit(false);
 
     bool ret = m_owner->m_output->commit();
+    if (TRACK_SUBMISSION)
+        m_owner->m_frameSubmissions.finishCommit(ret);
+    Log::logger->log(Log::TRACE, "output {} commit: submission {}, success: {}, buffer-bearing: {}", m_owner->m_name, SUBMISSION_ID, ret, BUFFER_BEARING);
     return ret;
 }
 

@@ -38,5 +38,5 @@ namespace Monitor {
         std::optional<SScanoutTestState> m_acceptedState;
     };
 
-    bool sameBufferScanoutNeedsCommit(bool cursorCommitDue, bool vrrKeepaliveDue, bool outputStateCommitDue);
+    bool sameBufferScanoutNeedsCommit(bool cursorCommitDue, bool vrrKeepaliveDue, bool outputStateCommitDue, bool protocolCompletionDue);
 }

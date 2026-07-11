@@ -91,10 +91,12 @@ class CWLSurfaceResource {
     void                          resetRole();
 
     struct {
-        CSignalT<>                          precommit;    // before commit
-        CSignalT<WP<SSurfaceState>>         stateCommit;  // when placing state in queue
-        CSignalT<WP<SSurfaceState>>         stateCommit2; // when placing state in queue used for commit timing so we apply fifo/fences first.
-        CSignalT<>                          commit;       // after commit
+        CSignalT<>                          precommit;      // before commit
+        CSignalT<WP<SSurfaceState>>         stateCommit;    // when placing state in queue
+        CSignalT<WP<SSurfaceState>>         stateCommit2;   // when placing state in queue used for commit timing so we apply fifo/fences first.
+        CSignalT<WP<SSurfaceState>>         stateApplied;   // when consuming queued state normally
+        CSignalT<WP<SSurfaceState>>         stateDiscarded; // when removing queued state without applying it
+        CSignalT<>                          commit;         // after commit
         CSignalT<>                          map;
         CSignalT<>                          unmap;
         CSignalT<SP<CWLSubsurfaceResource>> newSubsurface;
@@ -110,6 +112,7 @@ class CWLSurfaceResource {
     WP<CWLSurfaceResource>                 m_self;
     WP<Desktop::View::CWLSurface>          m_hlSurface;
     std::vector<PHLMONITORREF>             m_enteredOutputs;
+    PHLMONITORREF                          m_timingMainOutput;
     bool                                   m_mapped = false;
     std::vector<WP<CWLSubsurfaceResource>> m_subsurfaces;
     SP<ISurfaceRole>                       m_role;
@@ -130,6 +133,7 @@ class CWLSurfaceResource {
     void                                   sortSubsurfaces();
     bool                                   hasVisibleSubsurface();
     bool                                   isTearing();
+    PHLMONITOR                             timingMainOutput();
 
     // returns a pair: found surface (null if not found) and surface local coords.
     // localCoords param is relative to 0,0 of this surface
