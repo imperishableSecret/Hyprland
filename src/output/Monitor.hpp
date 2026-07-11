@@ -395,6 +395,7 @@ namespace Monitor {
         void                    scheduleModeRetry();
         void                    clearModeRetry();
         void                    updateVCGTRamps();
+        bool                    attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer);
         bool                    trySetFormat(std::span<const uint32_t> formats);
 
         bool                    m_doneScheduled  = false;
