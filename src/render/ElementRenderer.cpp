@@ -207,8 +207,11 @@ void IElementRenderer::drawPreBlur(WP<CPreBlurElement> element, const CRegion& d
 
     draw(element, fakeDamage);
 
-    m_renderData.pMonitor->m_blurFBDirty        = false;
     m_renderData.pMonitor->m_blurFBShouldRender = false;
+
+    const auto MONITOR = m_renderData.pMonitor.lock();
+    if (m_renderData.pMonitor->m_blurFBDirty && MONITOR)
+        g_pHyprRenderer->damageMonitor(MONITOR);
 
     m_renderData.renderModif = SAVEDRENDERMODIF;
 }
@@ -479,8 +482,17 @@ void IElementRenderer::drawTex(WP<CTexPassElement> element, const CRegion& damag
             m_renderData.renderModif.applyToRegion(inverseOpaque);
             inverseOpaque.intersect(element->m_data.damage);
             element->m_data.blurredBG = g_pHyprRenderer->blurMainFramebuffer(element->m_data.a, &inverseOpaque);
-        } else
+        } else if (g_pHyprRenderer->preBlurCacheValid(m_renderData.pMonitor))
             element->m_data.blurredBG = m_renderData.pMonitor->resources()->m_blurFB->getTexture();
+        else {
+            inverseOpaque.translate(box.pos());
+            m_renderData.renderModif.applyToRegion(inverseOpaque);
+            inverseOpaque.intersect(element->m_data.damage);
+            element->m_data.blurredBG = g_pHyprRenderer->blurMainFramebuffer(element->m_data.a, &inverseOpaque);
+        }
+
+        if (!element->m_data.blurredBG)
+            element->m_data.blur = false;
 
         draw(element, damage);
     } else

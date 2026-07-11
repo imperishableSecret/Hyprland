@@ -1896,21 +1896,35 @@ Mat3x3 IHyprRenderer::projectBoxToTarget(const CBox& box, std::optional<eTransfo
 }
 
 SP<ITexture> IHyprRenderer::blurMainFramebuffer(float a, CRegion* originalDamage) {
-    if (!m_renderData.currentFB->getTexture()) {
+    if (!m_renderData.currentFB || !m_renderData.currentFB->getTexture()) {
         Log::logger->log(Log::ERR, "BUG THIS: null fb texture while attempting to blur main fb?! (introspection off?!)");
-        return m_renderData.pMonitor->resources()->m_blurFB->getTexture(); // return something to sample from at least
+        return nullptr;
     }
 
     auto guard = bindTempFB(m_renderData.currentFB); // blurFramebuffer messes with FB bindings
     return blurFramebuffer(m_renderData.currentFB, a, originalDamage);
 }
 
-void IHyprRenderer::preBlurForCurrentMonitor(CRegion* fakeDamage) {
+bool IHyprRenderer::preBlurForCurrentMonitor(CRegion* fakeDamage) {
+    if (!m_renderData.pMonitor || !m_renderData.currentFB || !m_renderData.currentFB->getTexture())
+        return false;
+
+    const auto RESOURCES          = m_renderData.pMonitor->resources();
+    const auto SOURCE_DESCRIPTION = m_renderData.currentFB->imageDescription();
+    const auto OUTPUT_DESCRIPTION = m_renderData.pMonitor->workBufferImageDescription();
+    if (!SOURCE_DESCRIPTION || !OUTPUT_DESCRIPTION)
+        return false;
+
+    const auto CACHE_KEY = RESOURCES->preblurCacheKey(SOURCE_DESCRIPTION, OUTPUT_DESCRIPTION);
 
     const auto blurredTex = blurMainFramebuffer(1, fakeDamage);
+    if (!blurredTex || blurredTex == RESOURCES->m_blurFB->getTexture())
+        return false;
 
     // render onto blurFB
-    auto       guard          = bindTempFB(m_renderData.pMonitor->resources()->m_blurFB);
+    // Publish the new description only when its replacement contents are ready to be copied.
+    RESOURCES->m_blurFB->setImageDescription(OUTPUT_DESCRIPTION);
+    auto       guard          = bindTempFB(RESOURCES->m_blurFB);
     const auto SAVE_TRANSFORM = blurredTex->m_transform;
     blurredTex->m_transform   = Math::wlTransformToHyprutils(Math::invertTransform(m_renderData.pMonitor->m_transform));
 
@@ -1929,6 +1943,24 @@ void IHyprRenderer::preBlurForCurrentMonitor(CRegion* fakeDamage) {
     popMonitorTransformEnabled();
 
     blurredTex->m_transform = SAVE_TRANSFORM;
+
+    const bool VALID = RESOURCES->markPreblurCacheValid(CACHE_KEY);
+    // A completed cache is usable now, but rebuild it through the remaining full transition frames.
+    m_renderData.pMonitor->m_blurFBDirty = preblurNeedsRebuild(VALID, m_renderData.pMonitor->m_forceFullFrames);
+    return VALID;
+}
+
+bool IHyprRenderer::preBlurCacheValid(PHLMONITORREF pMonitor) {
+    if (!pMonitor || !m_renderData.currentFB)
+        return false;
+
+    const auto SOURCE_DESCRIPTION = m_renderData.currentFB->imageDescription();
+    const auto OUTPUT_DESCRIPTION = pMonitor->workBufferImageDescription();
+    if (!SOURCE_DESCRIPTION || !OUTPUT_DESCRIPTION)
+        return false;
+
+    const auto RESOURCES = pMonitor->resources();
+    return RESOURCES->preblurCacheValid(RESOURCES->preblurCacheKey(SOURCE_DESCRIPTION, OUTPUT_DESCRIPTION));
 }
 
 static bool isSDR2HDR(const NColorManagement::SImageDescription& imageDescription, const NColorManagement::SImageDescription& targetImageDescription) {

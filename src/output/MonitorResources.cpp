@@ -28,8 +28,12 @@ void CMonitorResources::initFB(SP<Render::IFramebuffer> fb) {
 void CMonitorResources::setImageDescription(NColorManagement::PImageDescription imageDescription) {
     if (m_imageDescription == imageDescription)
         return;
+
     m_imageDescription = imageDescription;
-    m_blurFB->setImageDescription(imageDescription);
+    ++m_imageDescriptionGeneration;
+    invalidatePreblurCache();
+    m_monitor->m_blurFBDirty = true;
+    // m_blurFB describes completed cache contents and is relabelled only after a matching rebuild.
     for (const auto& res : m_workBuffers)
         res.buffer->setImageDescription(imageDescription);
     if (m_monitorMirrorFB)
@@ -37,6 +41,26 @@ void CMonitorResources::setImageDescription(NColorManagement::PImageDescription 
     if (m_mirrorTex)
         m_mirrorTex->m_imageDescription = getMirrorTexImageDescription();
     invalidateMirrorFB();
+}
+
+Render::SPreblurCacheKey CMonitorResources::preblurCacheKey(NColorManagement::PImageDescription sourceDescription, NColorManagement::PImageDescription outputDescription) const {
+    return {
+        .generation          = m_imageDescriptionGeneration,
+        .sourceDescriptionId = sourceDescription ? sourceDescription->id() : 0,
+        .outputDescriptionId = outputDescription ? outputDescription->id() : 0,
+    };
+}
+
+void CMonitorResources::invalidatePreblurCache() {
+    m_preblurCacheState.invalidate();
+}
+
+bool CMonitorResources::markPreblurCacheValid(const Render::SPreblurCacheKey& key) {
+    return m_preblurCacheState.markValid(key, m_imageDescriptionGeneration);
+}
+
+bool CMonitorResources::preblurCacheValid(const Render::SPreblurCacheKey& key) const {
+    return m_preblurCacheState.validFor(key);
 }
 
 SP<Render::IFramebuffer> CMonitorResources::getUnusedWorkBuffer() {

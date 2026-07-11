@@ -217,7 +217,8 @@ namespace Render {
 
         SP<ITexture> blurMainFramebuffer(float a, CRegion* originalDamage);
         virtual SP<ITexture> blurFramebuffer(SP<IFramebuffer> source, float a, CRegion* originalDamage) = 0;
-        void                 preBlurForCurrentMonitor(CRegion* fakeDamage);
+        bool                 preBlurForCurrentMonitor(CRegion* fakeDamage);
+        bool                 preBlurCacheValid(PHLMONITORREF pMonitor);
 
         SCMSettings          getCMSettings(const NColorManagement::PImageDescription imageDescription, const NColorManagement::PImageDescription targetImageDescription,
                                            SP<CWLSurfaceResource> surface = nullptr, bool modifySDR = false, float sdrMinLuminance = -1.0f, int sdrMaxLuminance = -1,
