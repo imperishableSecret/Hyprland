@@ -644,7 +644,10 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSdr
     if (oldImageDescription != m_imageDescription) {
         if (PROTO::colorManagement)
             PROTO::colorManagement->onMonitorImageDescriptionChanged(m_self);
-        m_blurFBDirty = true;
+        m_blurFBDirty     = true;
+        m_forceFullFrames = std::max(m_forceFullFrames, 3);
+        if (const auto SELF = m_self.lock(); SELF && g_pHyprRenderer)
+            g_pHyprRenderer->damageMonitor(SELF);
     }
 }
 
@@ -2231,6 +2234,10 @@ void CMonitor::handleDSleave() {
 
     m_drmFormat   = m_prevDrmFormat;
     m_blurFBDirty = true;
+
+    m_forceFullFrames = std::max(m_forceFullFrames, 3);
+    if (const auto SELF = m_self.lock(); SELF && g_pHyprRenderer)
+        g_pHyprRenderer->damageMonitor(SELF);
 }
 
 bool CMonitor::canAttemptDirectScanoutFast() const {

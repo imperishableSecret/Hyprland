@@ -2056,6 +2056,11 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
             pMonitor->handleDSleave();
     }
 
+    // Output CM state changes can require full damage. Apply them before damage
+    // selection so the first composited frame after a fullscreen transition is
+    // repainted under the new output state.
+    handleFullscreenSettings(pMonitor);
+
     Event::bus()->m_events.render.pre.emit(pMonitor);
 
     const auto NOW = Time::steadyNow();
@@ -2299,6 +2304,7 @@ void IHyprRenderer::handleFullscreenSettings(PHLMONITOR pMonitor) {
     bool        wantHDR       = configuredHDR;
 
     const auto  FULLSCREEN_WINDOW = Fullscreen::controller()->getFullscreenWindow(pMonitor);
+    bool        needsFullRedraw   = false;
 
     if (pMonitor->supportsHDR()) {
         // HDR metadata determined by
@@ -2327,6 +2333,7 @@ void IHyprRenderer::handleFullscreenSettings(PHLMONITOR pMonitor) {
                     if (needsHdrMetadataUpdate) {
                         Log::logger->log(Log::INFO, "[CM] Updating HDR metadata from surface");
                         pMonitor->m_output->state->setHDRMetadata(SURF->m_colorManagement->hdrMetadata());
+                        needsFullRedraw = true;
                     }
                     hdrIsHandled               = true;
                     pMonitor->m_needsHDRupdate = false;
@@ -2339,8 +2346,10 @@ void IHyprRenderer::handleFullscreenSettings(PHLMONITOR pMonitor) {
             wantHDR = configuredHDR;
 
         if (!hdrIsHandled) {
-            if (pMonitor->inHDR() != wantHDR) {
-                if (*PAUTOHDR && !(pMonitor->inHDR() && configuredHDR)) {
+            const bool HDR_MODE_CHANGED   = pMonitor->inHDR() != wantHDR;
+            const bool HDR_SOURCE_CHANGED = pMonitor->m_previousFSWindow != FULLSCREEN_WINDOW;
+            if (HDR_MODE_CHANGED || HDR_SOURCE_CHANGED) {
+                if (HDR_MODE_CHANGED && *PAUTOHDR && !(pMonitor->inHDR() && configuredHDR)) {
                     // modify or restore monitor image description for auto-hdr
                     // FIXME ok for now, will need some other logic if monitor image description can be modified some other way
                     const auto targetCM      = wantHDR ? (*PAUTOHDR == 2 ? NCMType::CM_HDR_EDID : NCMType::CM_HDR) : pMonitor->m_cmType;
@@ -2351,6 +2360,7 @@ void IHyprRenderer::handleFullscreenSettings(PHLMONITOR pMonitor) {
                 }
                 Log::logger->log(Log::INFO, wantHDR ? "[CM] Updating HDR metadata from monitor" : "[CM] Restoring SDR mode");
                 pMonitor->m_output->state->setHDRMetadata(wantHDR ? createHDRMetadata(pMonitor->m_imageDescription->value(), pMonitor) : NO_HDR_METADATA);
+                needsFullRedraw = true;
             }
             pMonitor->m_needsHDRupdate = true;
         }
@@ -2360,6 +2370,7 @@ void IHyprRenderer::handleFullscreenSettings(PHLMONITOR pMonitor) {
     if (pMonitor->m_output->state->state().wideColorGamut != needsWCG) {
         Log::logger->log(Log::TRACE, "Setting wide color gamut {}", needsWCG ? "on" : "off");
         pMonitor->m_output->state->setWideColorGamut(needsWCG);
+        needsFullRedraw = true;
 
         // FIXME do not trust enabled10bit, auto switch to 10bit and back if needed
         if (needsWCG && !pMonitor->m_enabled10bit) {
@@ -2406,12 +2417,14 @@ void IHyprRenderer::handleFullscreenSettings(PHLMONITOR pMonitor) {
                     mat[2][0], mat[2][1], mat[2][2], //
                 };
                 pMonitor->m_output->state->setCTM(CTM);
+                needsFullRedraw = true;
             } else if (!INTEROP && pMonitor->m_ctm != Mat3x3::identity()) {
                 Log::logger->log(Log::INFO, "[CM] Setting identity CTM");
                 pMonitor->m_noShaderCTM = true;
                 pMonitor->m_ctmUpdated  = false;
 
                 pMonitor->m_output->state->setCTM(Mat3x3::identity());
+                needsFullRedraw = true;
             } else
                 resetCTM = true;
         }
@@ -2426,6 +2439,12 @@ void IHyprRenderer::handleFullscreenSettings(PHLMONITOR pMonitor) {
     if (pMonitor->m_ctmUpdated && !pMonitor->m_noShaderCTM) {
         pMonitor->m_ctmUpdated = false;
         pMonitor->m_output->state->setCTM(pMonitor->m_ctm);
+        needsFullRedraw = true;
+    }
+
+    if (needsFullRedraw) {
+        pMonitor->m_forceFullFrames = std::max(pMonitor->m_forceFullFrames, 3);
+        damageMonitor(pMonitor);
     }
 
     pMonitor->m_previousFSWindow = FULLSCREEN_WINDOW;
