@@ -2,6 +2,7 @@
 #include "../../Compositor.hpp"
 #include "Output.hpp"
 #include "Seat.hpp"
+#include "SurfaceTimingPolicy.hpp"
 #include "../types/WLBuffer.hpp"
 #include <algorithm>
 #include <array>
@@ -740,6 +741,14 @@ bool CWLSurfaceResource::isTearing() {
 }
 
 PHLMONITOR CWLSurfaceResource::timingMainOutput() {
+    if (m_enteredOutputs.size() == 1) {
+        const auto ENTERED = m_enteredOutputs.front().lock();
+        if (SurfaceTimingPolicy::canUseSingleEnteredOutput(m_enteredOutputs.size(), ENTERED && ENTERED->m_enabled && ENTERED->m_dpmsStatus)) {
+            m_timingMainOutput = ENTERED;
+            return ENTERED;
+        }
+    }
+
     const auto SURFACE_BOX = m_hlSurface ? m_hlSurface->getSurfaceBoxGlobal() : std::nullopt;
     const auto PREVIOUS    = m_timingMainOutput.lock();
     PHLMONITOR best;
@@ -755,7 +764,7 @@ PHLMONITOR CWLSurfaceResource::timingMainOutput() {
             area                    = INTERSECTION.width * INTERSECTION.height;
         }
 
-        if (area > bestArea || (area == bestArea && monitor == PREVIOUS)) {
+        if (SurfaceTimingPolicy::candidatePreferred(area, bestArea, monitor == PREVIOUS)) {
             best     = monitor;
             bestArea = area;
         }
@@ -824,10 +833,14 @@ void CWLSurfaceResource::updateCursorShm(CRegion damage) {
 void CWLSurfaceResource::presentFeedback(const Time::steady_tp& when, PHLMONITOR pMonitor, bool discarded) {
     frame(when);
 
-    if (discarded) {
+    const auto WORK_ACTION = SurfaceTimingPolicy::workAction(discarded, !!m_current.presentationFeedback, !!m_current.fifoBarrierOwner);
+    if (WORK_ACTION == SurfaceTimingPolicy::eWorkAction::DISCARD) {
         m_current.presentationFeedback.reset();
         return;
     }
+
+    if (WORK_ACTION == SurfaceTimingPolicy::eWorkAction::SKIP)
+        return;
 
     if (!pMonitor || timingMainOutput() != pMonitor)
         return;
