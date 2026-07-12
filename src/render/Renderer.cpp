@@ -2903,6 +2903,35 @@ void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
         return;
     }
 
+    for (const auto& MONITOR : State::monitorState()->monitors()) {
+        const auto SCANOUT_WINDOW = MONITOR->m_lastScanout.lock();
+        if (!Monitor::activeScanoutDamageIdentityMatches({
+                .scanoutActive         = MONITOR->m_directScanoutIsActive,
+                .surfaceMatches        = MONITOR->m_activeScanoutSurface.lock() == pSurface,
+                .scanoutWindowAlive    = !!SCANOUT_WINDOW,
+                .solitaryWindowMatches = MONITOR->m_solitaryClient.lock() == SCANOUT_WINDOW,
+                .solitaryRootMatches   = SCANOUT_WINDOW && SCANOUT_WINDOW->getSolitaryResource() == pSurface,
+            }))
+            continue;
+
+        if (!Monitor::canBypassCompositorDamage({
+                .scanoutActive         = true,
+                .surfaceMatches        = true,
+                .scanoutWindowAlive    = true,
+                .solitaryWindowMatches = true,
+                .solitaryRootMatches   = true,
+                .hasMirrors            = !MONITOR->m_mirrors.empty(),
+                .isMirror              = MONITOR->isMirror(),
+                .softwareCursor        = Pointer::mgr()->softwareLockedFor(MONITOR),
+                .captureBlocksScanout  = Screenshare::mgr()->outputBlocksDirectScanout(MONITOR),
+            }))
+            continue;
+
+        pSurface->m_current.accumulateBufferDamage();
+        MONITOR->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
+        return;
+    }
+
     // hack: schedule frame events
     if (!WLSURF->resource()->m_current.callbacks.empty() && pSurface->m_hlSurface) {
         const auto BOX = pSurface->m_hlSurface->getSurfaceBoxGlobal();

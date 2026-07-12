@@ -2475,6 +2475,8 @@ bool CMonitor::attemptDirectScanout(const SDirectScanoutCandidate& candidate) {
         m_lastScanout = PCANDIDATE;
         Log::logger->log(Log::DEBUG, "Entered a direct scanout to {:x}: \"{}\"", rc<uintptr_t>(PCANDIDATE.get()), PCANDIDATE->m_title);
     }
+    m_activeScanoutSurface = PSURFACE;
+
     m_scanoutNeedsCursorUpdate = false;
 
     if (!PBUFFER->lockedByBackend || PBUFFER->m_hlEvents.backendRelease)
@@ -2494,6 +2496,7 @@ bool CMonitor::attemptDirectScanout(const SDirectScanoutCandidate& candidate) {
 void CMonitor::handleDSleave() {
     Log::logger->log(Log::DEBUG, "Left a direct scanout.");
     m_lastScanout.reset();
+    m_activeScanoutSurface.reset();
     invalidateScanoutFormatCache();
     m_scanoutTestCache.invalidate();
     m_previousFSWindow.reset(); // recalc fs settings

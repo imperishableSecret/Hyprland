@@ -10,5 +10,19 @@ namespace Monitor {
         bool bufferSizeMatches     = false;
     };
 
+    struct SScanoutDamagePolicyState {
+        bool scanoutActive         = false;
+        bool surfaceMatches        = false;
+        bool scanoutWindowAlive    = false;
+        bool solitaryWindowMatches = false;
+        bool solitaryRootMatches   = false;
+        bool hasMirrors            = false;
+        bool isMirror              = false;
+        bool softwareCursor        = false;
+        bool captureBlocksScanout  = false;
+    };
+
     bool scanoutTestInputValid(const SScanoutTestPolicyState& state);
+    bool activeScanoutDamageIdentityMatches(const SScanoutDamagePolicyState& state);
+    bool canBypassCompositorDamage(const SScanoutDamagePolicyState& state);
 }

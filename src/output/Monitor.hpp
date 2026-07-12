@@ -159,7 +159,8 @@ namespace Monitor {
         PHLWINDOWREF m_solitaryClient;
 
         // for direct scanout
-        PHLWINDOWREF m_lastScanout;
+        PHLWINDOWREF           m_lastScanout;
+        WP<CWLSurfaceResource> m_activeScanoutSurface;
         bool m_directScanoutIsActive    = false; // for cleanup logic. m_lastScanout.expired() can become true before the DS cleanup if client crashes/exits while DS is active.
         bool m_scanoutNeedsCursorUpdate = false;
 
