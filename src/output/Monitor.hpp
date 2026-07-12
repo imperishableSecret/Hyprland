@@ -26,10 +26,12 @@
 #include "../helpers/cm/ColorManagement.hpp"
 #include "../helpers/signal/Signal.hpp"
 #include "DamageRing.hpp"
-#include "ScanoutKeepalive.hpp"
-#include "ScanoutGPUCache.hpp"
+#include "DirectScanoutCandidate.hpp"
+#include "DirectScanoutPolicy.hpp"
 #include "ScanoutTestCache.hpp"
 #include "FrameSubmission.hpp"
+#include "ScanoutKeepalive.hpp"
+#include "ScanoutGPUCache.hpp"
 #include <aquamarine/output/Output.hpp>
 #include <aquamarine/allocator/Swapchain.hpp>
 #include <hyprutils/os/FileDescriptor.hpp>
@@ -54,6 +56,7 @@ namespace Monitor {
 
         bool commit();
         bool test();
+        bool testScanout(const SP<IHLBuffer>& buffer);
         bool updateSwapchain();
         void applyModeWithSwapchain(const SP<Aquamarine::SOutputMode>& mode);
         void applyCustomModeWithSwapchain(const SP<Aquamarine::SOutputMode>& mode);
@@ -277,46 +280,48 @@ namespace Monitor {
         };
 
         // methods
-        void         onConnect(bool noRule);
-        void         onDisconnect(bool destroy = false);
-        void         applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSdrEotf);
-        void         invalidatePresentationTiming();
-        void         addDamage(const pixman_region32_t* rg);
-        void         addDamage(const CRegion& rg);
-        void         addDamage(const CBox& box);
-        void         addCaptureDamage(const CRegion& rg);
-        void         scheduleFrame(Aquamarine::IOutput::scheduleFrameReason reason = Aquamarine::IOutput::AQ_SCHEDULE_CLIENT_UNKNOWN);
+        void                            onConnect(bool noRule);
+        void                            onDisconnect(bool destroy = false);
+        void                            applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSdrEotf);
+        void                            invalidatePresentationTiming();
+        void                            addDamage(const pixman_region32_t* rg);
+        void                            addDamage(const CRegion& rg);
+        void                            addDamage(const CBox& box);
+        void                            addCaptureDamage(const CRegion& rg);
+        void                            scheduleFrame(Aquamarine::IOutput::scheduleFrameReason reason = Aquamarine::IOutput::AQ_SCHEDULE_CLIENT_UNKNOWN);
         Monitor::SScanoutCursorDecision cursorScanoutDecision();
-        void         scheduleVrrKeepalive();
-        bool         shouldSuppressCursorCommit();
-        bool         isVrrKeepaliveDue();
-        void         setMirror(const std::string&);
-        bool         isMirror();
-        float        getDefaultScale();
-        void         changeWorkspace(const PHLWORKSPACE& pWorkspace, bool internal = false, bool noMouseMove = false, bool noFocus = false);
-        void         changeWorkspace(const WORKSPACEID& id, bool internal = false, bool noMouseMove = false, bool noFocus = false);
-        void         setSpecialWorkspace(const PHLWORKSPACE& pWorkspace);
-        void         setSpecialWorkspace(const WORKSPACEID& id);
-        PHLWORKSPACE getCurrentWorkspace();
-        WORKSPACEID  activeWorkspaceID();
-        WORKSPACEID  activeSpecialWorkspaceID();
-        void         scheduleDone();
-        uint32_t     isSolitaryBlocked(bool full = false);
-        void         recheckSolitary();
-        uint8_t      isTearingBlocked(bool full = false);
-        void         updateSurfaceScaleTransformDetails();
-        bool         updateTearing();
-        uint16_t     isDSBlocked(bool full = false);
-        bool         attemptDirectScanout();
-        void         handleDSleave();
-        bool         canAttemptDirectScanoutFast() const;
-        bool         isFormatScanoutCapable(uint32_t format, uint64_t modifier);
-        bool         isMultiGPU();
-        void         resetExplicitFences();
-        void         setCTM(const Mat3x3& ctm);
-        void         onCursorMovedOnMonitor();
-        void         setDPMS(bool on);
-        bool         shouldUseSoftwareCursors();
+        void                            scheduleVrrKeepalive();
+        bool                            shouldSuppressCursorCommit();
+        bool                            isVrrKeepaliveDue();
+        void                            setMirror(const std::string&);
+        bool                            isMirror();
+        float                           getDefaultScale();
+        void                            changeWorkspace(const PHLWORKSPACE& pWorkspace, bool internal = false, bool noMouseMove = false, bool noFocus = false);
+        void                            changeWorkspace(const WORKSPACEID& id, bool internal = false, bool noMouseMove = false, bool noFocus = false);
+        void                            setSpecialWorkspace(const PHLWORKSPACE& pWorkspace);
+        void                            setSpecialWorkspace(const WORKSPACEID& id);
+        PHLWORKSPACE                    getCurrentWorkspace();
+        WORKSPACEID                     activeWorkspaceID();
+        WORKSPACEID                     activeSpecialWorkspaceID();
+        void                            scheduleDone();
+        uint32_t                        isSolitaryBlocked(bool full = false);
+        void                            recheckSolitary();
+        uint8_t                         isTearingBlocked(bool full = false);
+        void                            updateSurfaceScaleTransformDetails();
+        bool                            updateTearing();
+        uint16_t                        isDSBlocked(bool full = false);
+        SDirectScanoutEvaluation        evaluateDirectScanoutCandidate(bool full = false);
+        uint16_t                        directScanoutColorBlockers(const SDirectScanoutCandidate& candidate);
+        bool                            attemptDirectScanout(const SDirectScanoutCandidate& candidate);
+        void                            handleDSleave();
+        bool                            canAttemptDirectScanoutFast() const;
+        bool                            isFormatScanoutCapable(uint32_t format, uint64_t modifier);
+        bool                            isMultiGPU();
+        void                            resetExplicitFences();
+        void                            setCTM(const Mat3x3& ctm);
+        void                            onCursorMovedOnMonitor();
+        void                            setDPMS(bool on);
+        bool                            shouldUseSoftwareCursors();
 
         // IMonitorQueryable / IMonitorArrangeable
         virtual MONITORID                   id() const override;
@@ -420,7 +425,8 @@ namespace Monitor {
         void                    scheduleModeRetry();
         void                    clearModeRetry();
         void                    updateVCGTRamps();
-        bool                    attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer);
+        bool                    attemptDirectScanoutSameBuffer(const SDirectScanoutCandidate& candidate);
+        bool                    directScanoutCandidateValid(const SDirectScanoutCandidate& candidate) const;
         void                    invalidateScanoutGPUCache();
         SScanoutTestState       scanoutTestState(SP<IHLBuffer> buffer) const;
         bool                    trySetFormat(std::span<const uint32_t> formats);

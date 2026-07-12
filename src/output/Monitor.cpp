@@ -2072,23 +2072,30 @@ bool CMonitor::updateTearing() {
 }
 
 uint16_t CMonitor::isDSBlocked(bool full) {
-    uint16_t    reasons        = 0;
-    static auto PDIRECTSCANOUT = CConfigValue<Config::INTEGER>("render:direct_scanout");
-    static auto PNONSHADER     = CConfigValue<Config::INTEGER>("render:non_shader_cm");
-    const auto  PWORKSPACE     = m_activeWorkspace;
+    auto evaluation = evaluateDirectScanoutCandidate(full);
+    if (evaluation.candidate)
+        evaluation.blockers |= directScanoutColorBlockers(*evaluation.candidate);
+    return evaluation.blockers;
+}
+
+SDirectScanoutEvaluation CMonitor::evaluateDirectScanoutCandidate(bool full) {
+    SDirectScanoutEvaluation evaluation;
+    auto&                    reasons        = evaluation.blockers;
+    static auto              PDIRECTSCANOUT = CConfigValue<Config::INTEGER>("render:direct_scanout");
+    const auto               PWORKSPACE     = m_activeWorkspace;
 
     // Fast reject for the hot render path; full=true callers still collect
     // the remaining blockers for hyprctl/debug output below.
     if (!canAttemptDirectScanoutFast()) {
         reasons |= DS_BLOCK_CANDIDATE;
         if (!full)
-            return reasons;
+            return evaluation;
     }
 
     if (*PDIRECTSCANOUT == 0) {
         reasons |= DS_BLOCK_USER;
         if (!full)
-            return reasons;
+            return evaluation;
     }
 
     if (*PDIRECTSCANOUT == 2) {
@@ -2097,18 +2104,18 @@ uint16_t CMonitor::isDSBlocked(bool full) {
         if (!PWORKSPACE || !FSWINDOW || Fullscreen::controller()->getFullscreenModes(FSWINDOW).internal != Fullscreen::FSMODE_FULLSCREEN) {
             reasons |= DS_BLOCK_WINDOWED;
             if (!full)
-                return reasons;
+                return evaluation;
         } else if (FSWINDOW->getContentType() != CONTENT_TYPE_GAME) {
             reasons |= DS_BLOCK_CONTENT;
             if (!full)
-                return reasons;
+                return evaluation;
         }
     }
 
     if (!m_mirrors.empty() || isMirror()) {
         reasons |= DS_BLOCK_MIRROR;
         if (!full)
-            return reasons;
+            return evaluation;
     }
 
     const bool CAPTURE_BLOCKS_SCANOUT =
@@ -2118,31 +2125,31 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     if (CAPTURE_BLOCKS_SCANOUT) {
         reasons |= DS_BLOCK_RECORD;
         if (!full)
-            return reasons;
+            return evaluation;
     }
 
     if (Pointer::mgr()->softwareLockedFor(m_self.lock())) {
         reasons |= DS_BLOCK_SW;
         if (!full)
-            return reasons;
+            return evaluation;
     }
 
     const auto PCANDIDATE = m_solitaryClient.lock();
     if (!PCANDIDATE) {
         reasons |= DS_BLOCK_CANDIDATE;
-        return reasons;
+        return evaluation;
     }
 
     const auto PSURFACE = PCANDIDATE->getSolitaryResource();
     if (!PSURFACE || !PSURFACE->m_current.texture || !PSURFACE->m_current.buffer) {
         reasons |= DS_BLOCK_SURFACE;
-        return reasons;
+        return evaluation;
     }
 
     if (PSURFACE->m_current.bufferSize != m_pixelSize || PSURFACE->m_current.transform != m_transform) {
         reasons |= DS_BLOCK_TRANSFORM;
         if (!full)
-            return reasons;
+            return evaluation;
     }
 
     // we can't scanout shm buffers.
@@ -2150,7 +2157,7 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     if (!params.success || !PSURFACE->m_current.texture->isDMA() /* dmabuf */) {
         reasons |= DS_BLOCK_DMA;
         if (!full)
-            return reasons;
+            return evaluation;
     } else {
         auto& cache = m_cachedScanoutFormatCheck;
         if (!cache.valid || cache.format != params.format || cache.modifier != params.modifier)
@@ -2159,23 +2166,47 @@ uint16_t CMonitor::isDSBlocked(bool full) {
         if (!cache.ok) {
             reasons |= DS_BLOCK_FORMAT;
             if (!full)
-                return reasons;
+                return evaluation;
         }
     }
 
-    const bool surfaceIsHDR   = PSURFACE->m_colorManagement.valid() && PSURFACE->m_colorManagement->isHDR();
-    const bool surfaceIsScRGB = surfaceIsHDR && PSURFACE->m_colorManagement->isWindowsScRGB();
+    const bool surfaceIsHDR               = PSURFACE->m_colorManagement.valid() && PSURFACE->m_colorManagement->isHDR();
+    const bool surfaceIsScRGB             = surfaceIsHDR && PSURFACE->m_colorManagement->isWindowsScRGB();
+    const auto IMAGE_DESCRIPTION_IDENTITY = PSURFACE->m_colorManagement.valid() ? rc<uintptr_t>(&PSURFACE->m_colorManagement->imageDescription()) : 0;
 
     if (surfaceIsScRGB)
-        reasons |= DS_BLOCK_CM; // block scRGB
-    else if (*PNONSHADER != CM_NS_IGNORE) {
-        if (!surfaceIsHDR && needsCM() && !canNoShaderCM(true))
-            reasons |= DS_BLOCK_CM; // block SDR that needs CM while non-shader CM isn't available
-        else if (surfaceIsHDR && !inHDR())
-            reasons |= DS_BLOCK_CM; // block HDR while monitor isn't in HDR mode
-    }
+        reasons |= DS_BLOCK_CM;
 
-    return reasons;
+    evaluation.candidate = SDirectScanoutCandidate{
+        .window                   = PCANDIDATE,
+        .surface                  = PSURFACE,
+        .buffer                   = PSURFACE->m_current.buffer.m_buffer,
+        .bufferSize               = PSURFACE->m_current.bufferSize,
+        .transform                = PSURFACE->m_current.transform,
+        .format                   = params.format,
+        .modifier                 = params.modifier,
+        .colorManagementIdentity  = rc<uintptr_t>(PSURFACE->m_colorManagement.get()),
+        .imageDescriptionIdentity = IMAGE_DESCRIPTION_IDENTITY,
+        .contentType              = sc<uint16_t>(PCANDIDATE->getContentType()),
+        .surfaceIsHDR             = surfaceIsHDR,
+        .surfaceIsScRGB           = surfaceIsScRGB,
+    };
+
+    return evaluation;
+}
+
+uint16_t CMonitor::directScanoutColorBlockers(const SDirectScanoutCandidate& candidate) {
+    static auto PNONSHADER = CConfigValue<Config::INTEGER>("render:non_shader_cm");
+
+    if (candidate.surfaceIsScRGB)
+        return DS_BLOCK_CM;
+    if (*PNONSHADER == CM_NS_IGNORE)
+        return 0;
+    if (!candidate.surfaceIsHDR && needsCM() && !canNoShaderCM(true))
+        return DS_BLOCK_CM;
+    if (candidate.surfaceIsHDR && !inHDR())
+        return DS_BLOCK_CM;
+    return 0;
 }
 
 bool CMonitor::isVrrKeepaliveDue() {
@@ -2254,7 +2285,9 @@ SScanoutTestState CMonitor::scanoutTestState(SP<IHLBuffer> buffer) const {
     };
 }
 
-bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer) {
+bool CMonitor::attemptDirectScanoutSameBuffer(const SDirectScanoutCandidate& candidate) {
+    const auto& surface = candidate.surface;
+    const auto& buffer  = candidate.buffer;
     surface->presentFeedback(Time::steadyNow(), m_self.lock());
 
     const bool cursorCommitDue       = m_scanoutNeedsCursorUpdate && !shouldSuppressCursorCommit();
@@ -2263,10 +2296,11 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
     const bool protocolCompletionDue = m_frameSubmissions.hasStagedWork();
 
     if (sameBufferScanoutNeedsCommit(cursorCommitDue, vrrKeepaliveDue, outputStateCommitDue, protocolCompletionDue)) {
-        m_output->state->setBuffer(buffer);
-        const auto TEST_STATE = scanoutTestState(buffer);
-        const bool NEEDS_TEST = !m_scanoutTestCache.canSkip(TEST_STATE, outputStateCommitDue, m_scanoutNeedsCursorUpdate);
-        if (NEEDS_TEST && !m_state.test()) {
+        const auto COMMITTED = m_output->state->state().committed;
+        m_output->state->setScanoutBuffer(buffer);
+        const bool                             NEEDS_TEST = !m_scanoutTestCache.hasAcceptedState() || scanoutStateNeedsStructuralTest(COMMITTED);
+        const std::optional<SScanoutTestState> TEST_STATE = NEEDS_TEST ? std::optional<SScanoutTestState>{scanoutTestState(buffer)} : std::nullopt;
+        if (NEEDS_TEST && !m_state.testScanout(buffer)) {
             Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursorCommitDue: {}, vrrKeepaliveDue: {}, outputStateCommitDue: {}", cursorCommitDue,
                              vrrKeepaliveDue, outputStateCommitDue);
             m_lastScanout.reset();
@@ -2287,7 +2321,8 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
         }
 
         Log::logger->log(Log::TRACE, "output {} same-buffer scanout submitted as {} with {} protocol work items", m_name, SUBMISSION_ID, WORK_COUNT);
-        m_scanoutTestCache.accept(TEST_STATE);
+        if (TEST_STATE)
+            m_scanoutTestCache.accept(*TEST_STATE);
         m_scanoutNeedsCursorUpdate = false;
         return true;
     }
@@ -2296,21 +2331,71 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
     return true;
 }
 
-bool CMonitor::attemptDirectScanout() {
-    static const auto PSAME = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer");
-
-    const auto        blockedReason = isDSBlocked();
-    if (blockedReason)
+bool CMonitor::directScanoutCandidateValid(const SDirectScanoutCandidate& candidate) const {
+    const auto WINDOW = m_solitaryClient.lock();
+    if (!WINDOW || !candidate.surface)
         return false;
 
-    const auto PCANDIDATE = m_solitaryClient.lock();
-    const auto PSURFACE   = PCANDIDATE->getSolitaryResource();
-    auto       PBUFFER    = PSURFACE->m_current.buffer.m_buffer;
+    const auto SURFACE = WINDOW->getSolitaryResource();
+    if (!SURFACE)
+        return false;
+
+    const auto& CURRENT = SURFACE->m_current;
+    if (!CURRENT.buffer || !CURRENT.texture)
+        return false;
+
+    const auto                   PARAMS                     = CURRENT.buffer->dmabuf();
+    const bool                   HDR                        = SURFACE->m_colorManagement.valid() && SURFACE->m_colorManagement->isHDR();
+    const bool                   SCRGB                      = HDR && SURFACE->m_colorManagement->isWindowsScRGB();
+    const auto                   IMAGE_DESCRIPTION_IDENTITY = SURFACE->m_colorManagement.valid() ? rc<uintptr_t>(&SURFACE->m_colorManagement->imageDescription()) : 0;
+
+    const SDirectScanoutSnapshot EXPECTED = {
+        .windowIdentity           = rc<uintptr_t>(candidate.window.get()),
+        .surfaceIdentity          = rc<uintptr_t>(candidate.surface.get()),
+        .bufferIdentity           = rc<uintptr_t>(candidate.buffer.get()),
+        .bufferSize               = candidate.bufferSize,
+        .transform                = candidate.transform,
+        .format                   = candidate.format,
+        .modifier                 = candidate.modifier,
+        .colorManagementIdentity  = candidate.colorManagementIdentity,
+        .imageDescriptionIdentity = candidate.imageDescriptionIdentity,
+        .contentType              = candidate.contentType,
+        .dmaBuffer                = true,
+        .surfaceIsHDR             = candidate.surfaceIsHDR,
+        .surfaceIsScRGB           = candidate.surfaceIsScRGB,
+    };
+    const SDirectScanoutSnapshot CURRENT_SNAPSHOT = {
+        .windowIdentity           = rc<uintptr_t>(WINDOW.get()),
+        .surfaceIdentity          = rc<uintptr_t>(SURFACE.get()),
+        .bufferIdentity           = rc<uintptr_t>(CURRENT.buffer.m_buffer.get()),
+        .bufferSize               = CURRENT.bufferSize,
+        .transform                = CURRENT.transform,
+        .format                   = PARAMS.format,
+        .modifier                 = PARAMS.modifier,
+        .colorManagementIdentity  = rc<uintptr_t>(SURFACE->m_colorManagement.get()),
+        .imageDescriptionIdentity = IMAGE_DESCRIPTION_IDENTITY,
+        .contentType              = sc<uint16_t>(WINDOW->getContentType()),
+        .dmaBuffer                = CURRENT.texture && CURRENT.texture->isDMA() && PARAMS.success,
+        .surfaceIsHDR             = HDR,
+        .surfaceIsScRGB           = SCRGB,
+    };
+    return directScanoutSnapshotMatches(EXPECTED, CURRENT_SNAPSHOT);
+}
+
+bool CMonitor::attemptDirectScanout(const SDirectScanoutCandidate& candidate) {
+    static const auto PSAME = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer");
+
+    if (!directScanoutCandidateValid(candidate))
+        return false;
+
+    const auto& PCANDIDATE = candidate.window;
+    const auto& PSURFACE   = candidate.surface;
+    const auto& PBUFFER    = candidate.buffer;
 
     if (PBUFFER == m_output->state->state().buffer && *PSAME)
-        return attemptDirectScanoutSameBuffer(PSURFACE, PBUFFER);
+        return attemptDirectScanoutSameBuffer(candidate);
 
-    const auto params = PSURFACE->m_current.buffer->dmabuf();
+    const auto params = PBUFFER->dmabuf();
 
     Log::logger->log(Log::TRACE, "attemptDirectScanout: surface {:x} passed, will attempt, buffer {} fmt: {} -> {} (mod {})", rc<uintptr_t>(PSURFACE.get()),
                      rc<uintptr_t>(PSURFACE->m_current.buffer.m_buffer.get()), m_drmFormat, params.format, params.modifier);
@@ -2318,40 +2403,33 @@ bool CMonitor::attemptDirectScanout() {
     // FIXME: make sure the buffer actually follows the available scanout dmabuf formats
     // and comes from the appropriate device. This may implode on multi-gpu!!
 
-    // entering into scanout, so save monitor format
-    if (m_lastScanout.expired())
-        m_prevDrmFormat = m_drmFormat;
+    const auto previousBuffer              = m_output->state->state().buffer;
+    const auto previousPresentationMode    = m_output->state->state().presentationMode;
+    const bool previousDirectScanoutBuffer = m_output->state->state().directScanoutBuffer;
+    m_output->state->setScanoutBuffer(PBUFFER);
 
-    const auto  previousFormat           = m_drmFormat;
-    const auto  previousBuffer           = m_output->state->state().buffer;
-    const auto  previousPresentationMode = m_output->state->state().presentationMode;
-    bool        scanoutCommitted         = false;
-    CScopeGuard rollbackState            = {[this, previousFormat, previousBuffer, previousPresentationMode, &scanoutCommitted]() {
+    bool        scanoutCommitted = false;
+    CScopeGuard rollbackState    = {[this, previousBuffer, previousPresentationMode, previousDirectScanoutBuffer, &scanoutCommitted]() {
         if (scanoutCommitted)
             return;
 
-        m_drmFormat = previousFormat;
-        m_output->state->setFormat(previousFormat);
-        m_output->state->setBuffer(previousBuffer);
+        if (previousDirectScanoutBuffer)
+            m_output->state->setScanoutBuffer(previousBuffer);
+        else
+            m_output->state->setBuffer(previousBuffer);
         m_output->state->setPresentationMode(previousPresentationMode);
         resetExplicitFences();
     }};
 
-    const bool  NEEDS_TEST = !m_lastScanout || m_drmFormat != params.format; // do not retest while it's active
-    if (m_drmFormat != params.format) {
-        m_output->state->setFormat(params.format);
-        m_drmFormat = params.format;
-    }
-
-    m_output->state->setBuffer(PBUFFER);
     Log::logger->log(Log::TRACE, "attemptDirectScanout: setting presentation mode");
     m_output->state->setPresentationMode(m_tearingState.activelyTearing ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE :
                                                                           Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC);
+    const auto TEST_STATE = scanoutTestState(PBUFFER);
+    const bool NEEDS_TEST = !m_scanoutTestCache.canSkipNewBuffer(TEST_STATE);
 
-    if (NEEDS_TEST && !m_state.test()) {
+    if (NEEDS_TEST && !m_state.testScanout(PBUFFER)) {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed basic test");
-        if (!isFormatScanoutCapable(params.format, params.modifier))
-            m_cachedScanoutFormatCheck = {.format = params.format, .modifier = params.modifier, .ok = false, .valid = true};
+        m_cachedScanoutFormatCheck = {.format = params.format, .modifier = params.modifier, .ok = false, .valid = true};
         m_scanoutTestCache.invalidate();
         return false;
     }
@@ -2393,12 +2471,10 @@ bool CMonitor::attemptDirectScanout() {
     Log::logger->log(Log::TRACE, "output {} direct scanout submitted as {}", m_name, SUBMISSION_ID);
     scanoutCommitted = true;
     m_scanoutTestCache.accept(scanoutTestState(PBUFFER));
-
     if (m_lastScanout.expired()) {
         m_lastScanout = PCANDIDATE;
         Log::logger->log(Log::DEBUG, "Entered a direct scanout to {:x}: \"{}\"", rc<uintptr_t>(PCANDIDATE.get()), PCANDIDATE->m_title);
     }
-
     m_scanoutNeedsCursorUpdate = false;
 
     if (!PBUFFER->lockedByBackend || PBUFFER->m_hlEvents.backendRelease)
@@ -2423,11 +2499,6 @@ void CMonitor::handleDSleave() {
     m_previousFSWindow.reset(); // recalc fs settings
     m_directScanoutIsActive = false;
 
-    // reset DRM format, but only if needed since it might modeset
-    if (m_output->state->state().drmFormat != m_prevDrmFormat)
-        m_output->state->setFormat(m_prevDrmFormat);
-
-    m_drmFormat   = m_prevDrmFormat;
     m_blurFBDirty = true;
 
     m_forceFullFrames = std::max(m_forceFullFrames, 3);
@@ -2882,6 +2953,7 @@ bool CMonitorState::commit() {
     }
 
     const auto& STATE          = m_owner->m_output->state->state();
+    const auto  COMMITTED      = STATE.committed;
     const auto  BUFFER         = STATE.buffer;
     const bool  BUFFER_BEARING = STATE.committed & Aquamarine::COutputState::AQ_OUTPUT_STATE_BUFFER;
     const bool  ENABLED        = STATE.enabled;
@@ -2894,6 +2966,10 @@ bool CMonitorState::commit() {
     bool ret = m_owner->m_output->commit();
     if (TRACK_SUBMISSION)
         m_owner->m_frameSubmissions.finishCommit(ret);
+    if (ret && scanoutStateNeedsStructuralTest(COMMITTED)) {
+        m_owner->m_scanoutTestCache.invalidate();
+        m_owner->invalidateScanoutFormatCache();
+    }
     Log::logger->log(Log::TRACE, "output {} commit: submission {}, success: {}, buffer-bearing: {}", m_owner->m_name, SUBMISSION_ID, ret, BUFFER_BEARING);
     return ret;
 }
@@ -2905,6 +2981,23 @@ bool CMonitorState::test() {
     ensureBufferPresent();
 
     return m_owner->m_output->test();
+}
+
+bool CMonitorState::testScanout(const SP<IHLBuffer>& buffer) {
+    const auto& OUTPUT = m_owner->m_output;
+    const auto* STATE  = OUTPUT ? &OUTPUT->state->state() : nullptr;
+    const auto  MODE   = STATE ? (STATE->mode ? STATE->mode : STATE->customMode) : nullptr;
+    if (!scanoutTestInputValid({
+            .outputAvailable       = !!OUTPUT,
+            .bufferAvailable       = !!buffer,
+            .outputEnabled         = STATE && STATE->enabled,
+            .modeAvailable         = !!MODE,
+            .attachedBufferMatches = STATE && STATE->buffer.get() == buffer.get(),
+            .bufferSizeMatches     = buffer && buffer->size == m_owner->m_pixelSize,
+        }))
+        return false;
+
+    return OUTPUT->test();
 }
 
 bool CMonitorState::updateSwapchain() {

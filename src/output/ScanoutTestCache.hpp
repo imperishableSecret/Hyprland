@@ -31,6 +31,8 @@ namespace Monitor {
     class CScanoutTestCache {
       public:
         bool canSkip(const SScanoutTestState& state, bool outputStateChanged, bool cursorStateChanged) const;
+        bool canSkipNewBuffer(const SScanoutTestState& state) const;
+        bool hasAcceptedState() const;
         void accept(const SScanoutTestState& state);
         void invalidate();
 
@@ -39,4 +41,5 @@ namespace Monitor {
     };
 
     bool sameBufferScanoutNeedsCommit(bool cursorCommitDue, bool vrrKeepaliveDue, bool outputStateCommitDue, bool protocolCompletionDue);
+    bool scanoutStateNeedsStructuralTest(uint32_t committed);
 }

@@ -2175,14 +2175,16 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();
-    const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast() && !pMonitor->isDSBlocked();
+    const auto SCANOUT_EVALUATION      = pMonitor->evaluateDirectScanoutCandidate();
+    const bool canPrepareDirectScanout = SCANOUT_EVALUATION.candidate && SCANOUT_EVALUATION.blockers == 0;
 
     // Prepare output state before either scanout path can commit it. When a
     // speculative scanout fails, restore the composited state below.
-    handleFullscreenSettings(pMonitor, canAttemptDirectScanout);
+    handleFullscreenSettings(pMonitor, canPrepareDirectScanout);
 
-    if (canAttemptDirectScanout) {
-        if (pMonitor->attemptDirectScanout()) {
+    if (canPrepareDirectScanout) {
+        const bool COLOR_STATE_VALID = pMonitor->directScanoutColorBlockers(*SCANOUT_EVALUATION.candidate) == 0;
+        if (COLOR_STATE_VALID && pMonitor->attemptDirectScanout(*SCANOUT_EVALUATION.candidate)) {
             if (!pMonitor->needsACopyFB())
                 pMonitor->resources()->markMirrorFBStale();
 
@@ -2196,6 +2198,12 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         if (!pMonitor->m_frameSubmissions.hasStagedSubmission())
             pMonitor->m_frameSubmissions.begin();
 
+        pMonitor->m_previousFSWindow.reset();
+        handleFullscreenSettings(pMonitor, false);
+        pMonitor->m_forceFullFrames = std::max(pMonitor->m_forceFullFrames, 1);
+        damageMonitor(pMonitor);
+    } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive) {
+        pMonitor->handleDSleave();
         pMonitor->m_previousFSWindow.reset();
         handleFullscreenSettings(pMonitor, false);
     }

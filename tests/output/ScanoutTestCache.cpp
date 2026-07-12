@@ -1,5 +1,6 @@
 #include <output/ScanoutTestCache.hpp>
 
+#include <aquamarine/output/Output.hpp>
 #include <gtest/gtest.h>
 
 using namespace Monitor;
@@ -112,4 +113,29 @@ TEST(ScanoutTestCache, sameBufferCommitsPendingOutputState) {
     EXPECT_TRUE(sameBufferScanoutNeedsCommit(true, false, false, false));
     EXPECT_TRUE(sameBufferScanoutNeedsCommit(false, true, false, false));
     EXPECT_TRUE(sameBufferScanoutNeedsCommit(false, false, false, true));
+}
+
+TEST(ScanoutTestCache, classifiesEveryOutputStateBit) {
+    using Aquamarine::COutputState;
+
+    EXPECT_FALSE(scanoutStateNeedsStructuralTest(0));
+    EXPECT_FALSE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_DAMAGE));
+    EXPECT_FALSE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_BUFFER));
+    EXPECT_FALSE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_EXPLICIT_IN_FENCE));
+    EXPECT_FALSE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_EXPLICIT_OUT_FENCE));
+    EXPECT_FALSE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_CURSOR_POS));
+
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_ENABLED));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_ADAPTIVE_SYNC));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_PRESENTATION_MODE));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_GAMMA_LUT));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_MODE));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_FORMAT));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_CTM));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_HDR));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_DEGAMMA_LUT));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_WCG));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_CURSOR_SHAPE));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(COutputState::AQ_OUTPUT_STATE_CONTENT_TYPE));
+    EXPECT_TRUE(scanoutStateNeedsStructuralTest(1U << 17)); // unknown future bit
 }
