@@ -108,6 +108,7 @@ CMonitor::~CMonitor() {
 
 void CMonitor::onConnect(bool noRule) {
     invalidatePresentationTiming();
+    invalidateScanoutGPUCache();
     Event::bus()->m_events.monitor.preAdded.emit(m_self.lock());
     CScopeGuard x = {[]() { State::monitorLayoutController()->arrange(); }};
 
@@ -411,6 +412,7 @@ void CMonitor::onConnect(bool noRule) {
 }
 
 void CMonitor::onDisconnect(bool destroy) {
+    invalidateScanoutGPUCache();
     m_frameSubmissions.discardAll();
     Event::bus()->m_events.monitor.preRemoved.emit(m_self.lock());
     CScopeGuard x = {[this]() {
@@ -2461,39 +2463,40 @@ bool CMonitor::isFormatScanoutCapable(uint32_t format, uint64_t modifier) {
 
 bool CMonitor::isMultiGPU() {
     if (!m_output || !g_pCompositor)
-        return false;
+        return true;
 
-    const auto PREFERREDALLOCATOR = m_output->getBackend()->preferredAllocator();
-    const int  allocatorFD        = PREFERREDALLOCATOR ? PREFERREDALLOCATOR->drmFD() : -1;
-    const int  compositorFD       = g_pCompositor->m_drm.fd;
+    const auto                OUTPUTBACKEND      = m_output->getBackend();
+    const auto                PREFERREDALLOCATOR = OUTPUTBACKEND ? OUTPUTBACKEND->preferredAllocator() : nullptr;
+    const int                 allocatorFD        = PREFERREDALLOCATOR ? PREFERREDALLOCATOR->drmFD() : -1;
+    const int                 compositorFD       = g_pCompositor->m_drm.fd;
+    const SScanoutGPUIdentity IDENTITY           = {
+        .allocator            = rc<uintptr_t>(PREFERREDALLOCATOR.get()),
+        .outputBackend        = rc<uintptr_t>(OUTPUTBACKEND.get()),
+        .compositorBackend    = rc<uintptr_t>(g_pCompositor->m_aqBackend.get()),
+        .compositorGeneration = g_pCompositor->m_drm.generation,
+        .allocatorFD          = allocatorFD,
+        .compositorFD         = compositorFD,
+    };
 
-    if (allocatorFD < 0 || compositorFD < 0) {
-        m_cachedAllocatorDRMDev.reset();
-        m_cachedCompositorDRMDev.reset();
-        m_cachedAllocatorDRMFD  = allocatorFD;
-        m_cachedCompositorDRMFD = compositorFD;
-        m_cachedSameGPU         = true;
-        return false;
-    }
+    const auto CACHED = m_scanoutGPUCache.lookup(IDENTITY);
+    if (CACHED != eScanoutGPUCacheResult::UNKNOWN)
+        return CACHED == eScanoutGPUCacheResult::MULTI_GPU;
 
     const auto allocatorDev  = DRM::devIDFromFD(allocatorFD);
     const auto compositorDev = DRM::devIDFromFD(compositorFD);
 
-    // AQ can reopen DRM nodes for refcounting, so raw fd numbers are not a stable cache key.
-    const bool useDeviceIDCache = allocatorDev.has_value() && compositorDev.has_value();
-    const bool cacheStale       = !m_cachedSameGPU ||
-        (useDeviceIDCache ? m_cachedAllocatorDRMDev != allocatorDev || m_cachedCompositorDRMDev != compositorDev :
-                            m_cachedAllocatorDRMFD != allocatorFD || m_cachedCompositorDRMFD != compositorFD);
-
-    if (cacheStale) {
-        m_cachedAllocatorDRMDev  = allocatorDev;
-        m_cachedCompositorDRMDev = compositorDev;
-        m_cachedAllocatorDRMFD   = allocatorFD;
-        m_cachedCompositorDRMFD  = compositorFD;
-        m_cachedSameGPU          = DRM::sameGpu(allocatorFD, compositorFD);
+    if (!allocatorDev || !compositorDev) {
+        m_scanoutGPUCache.invalidate();
+        return true;
     }
 
-    return !*m_cachedSameGPU;
+    const bool SAME_GPU = DRM::sameGpu(allocatorFD, compositorFD);
+    m_scanoutGPUCache.store(IDENTITY, {.allocatorDevice = *allocatorDev, .compositorDevice = *compositorDev, .sameGPU = SAME_GPU});
+    return !SAME_GPU;
+}
+
+void CMonitor::invalidateScanoutGPUCache() {
+    m_scanoutGPUCache.invalidate();
 }
 
 void CMonitor::resetExplicitFences() {

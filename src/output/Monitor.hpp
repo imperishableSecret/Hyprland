@@ -27,6 +27,7 @@
 #include "../helpers/signal/Signal.hpp"
 #include "DamageRing.hpp"
 #include "ScanoutKeepalive.hpp"
+#include "ScanoutGPUCache.hpp"
 #include "ScanoutTestCache.hpp"
 #include "FrameSubmission.hpp"
 #include <aquamarine/output/Output.hpp>
@@ -385,11 +386,7 @@ namespace Monitor {
         PHLWINDOWREF                        m_previousFSWindow;
         bool                                m_needsHDRupdate = false;
 
-        std::optional<dev_t>                m_cachedAllocatorDRMDev;
-        std::optional<dev_t>                m_cachedCompositorDRMDev;
-        int                                 m_cachedAllocatorDRMFD  = -1;
-        int                                 m_cachedCompositorDRMFD = -1;
-        std::optional<bool>                 m_cachedSameGPU;
+        CScanoutGPUCache                    m_scanoutGPUCache;
 
         NColorManagement::PImageDescription m_imageDescription = NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{});
         bool                                m_noShaderCTM      = false; // sets drm CTM, restore needed
@@ -424,6 +421,7 @@ namespace Monitor {
         void                    clearModeRetry();
         void                    updateVCGTRamps();
         bool                    attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer);
+        void                    invalidateScanoutGPUCache();
         SScanoutTestState       scanoutTestState(SP<IHLBuffer> buffer) const;
         bool                    trySetFormat(std::span<const uint32_t> formats);
 

@@ -2,6 +2,7 @@
 
 #include <sys/resource.h>
 
+#include <cstdint>
 #include <ranges>
 
 #include "helpers/math/Direction.hpp"
@@ -35,8 +36,11 @@ class CCompositor {
     wl_display*    m_wlDisplay   = nullptr;
     wl_event_loop* m_wlEventLoop = nullptr;
     struct {
-        int  fd             = -1;
-        bool syncobjSupport = false;
+        // Increment whenever fd is assigned from a newly opened DRM device,
+        // even if the kernel reuses the same descriptor number.
+        int      fd             = -1;
+        uint64_t generation     = 0;
+        bool     syncobjSupport = false;
     } m_drm;
 
     struct {

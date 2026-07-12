@@ -353,6 +353,7 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
     Log::logger->log(Log::DEBUG, "\nCurrent splash: {}\n\n", m_currentSplash);
 
     m_drm.fd = m_aqBackend->drmFD();
+    ++m_drm.generation;
     Log::logger->log(Log::DEBUG, "Running on DRMFD: {}", m_drm.fd);
 
     m_drmRenderNode.fd = m_aqBackend->drmRenderNodeFD();
