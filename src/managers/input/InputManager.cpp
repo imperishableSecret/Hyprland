@@ -278,7 +278,10 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
     if (PMONITOR->m_cursorZoom->value() != 1.f)
         g_pHyprRenderer->damageMonitor(PMONITOR);
 
-    bool       skipFrameSchedule = PMONITOR->shouldSkipScheduleFrameOnMouseEvent();
+    const auto CURSOR_SCANOUT_DECISION = PMONITOR->cursorScanoutDecision();
+    if (CURSOR_SCANOUT_DECISION.scheduleKeepalive)
+        PMONITOR->scheduleVrrKeepalive();
+    const bool skipFrameSchedule = CURSOR_SCANOUT_DECISION.skipCursorSchedule;
 
     const auto solitary = PMONITOR->m_solitaryClient.lock();
     const auto self     = PMONITOR->m_self.lock();

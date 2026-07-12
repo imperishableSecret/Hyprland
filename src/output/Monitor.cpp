@@ -1223,20 +1223,26 @@ bool CMonitor::shouldSuppressCursorCommit() {
     return (!shouldRenderCursor || noBreak) && m_output->state->state().adaptiveSync;
 }
 
-bool CMonitor::shouldSkipScheduleFrameOnMouseEvent() {
-    if (!shouldSuppressCursorCommit())
-        return false;
+Monitor::SScanoutCursorDecision CMonitor::cursorScanoutDecision() {
+    const bool SUPPRESS = shouldSuppressCursorCommit();
+    if (!m_output)
+        return Monitor::scanoutCursorDecision(SUPPRESS, {});
 
-    // keep requested minimum refresh rate
-    if (isVrrKeepaliveDue()) {
-        // damage whole screen because some previous cursor box damages were skipped
-        if (m_resources)
-            m_resources->markMirrorSourceDamage(CRegion{0, 0, m_transformedSize.x, m_transformedSize.y});
-        m_damage.damageEntire();
-        return false;
-    }
+    return Monitor::scanoutCursorDecision(SUPPRESS,
+                                          {
+                                              .adaptiveSync     = m_output->state->state().adaptiveSync,
+                                              .minimumRefreshHz = m_vrrMinHz,
+                                              .elapsedMillis    = sc<float>(m_lastPresentationTimer.getMillis()),
+                                              .pendingPageFlip  = m_output->pendingPageFlip(),
+                                              .pendingIdleFrame = m_output->pendingIdleFrame(),
+                                          });
+}
 
-    return true;
+void CMonitor::scheduleVrrKeepalive() {
+    if (m_resources)
+        m_resources->markMirrorSourceDamage(CRegion{0, 0, m_transformedSize.x, m_transformedSize.y});
+    m_damage.damageEntire();
+    scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
 }
 
 bool CMonitor::isMirror() {
@@ -2171,10 +2177,16 @@ uint16_t CMonitor::isDSBlocked(bool full) {
 }
 
 bool CMonitor::isVrrKeepaliveDue() {
-    if (!m_output || !m_output->state->state().adaptiveSync || m_vrrMinHz <= 0)
+    if (!m_output)
         return false;
 
-    return m_lastPresentationTimer.getMillis() > 1000.0f / m_vrrMinHz;
+    return Monitor::scanoutKeepaliveDue({
+        .adaptiveSync     = m_output->state->state().adaptiveSync,
+        .minimumRefreshHz = m_vrrMinHz,
+        .elapsedMillis    = sc<float>(m_lastPresentationTimer.getMillis()),
+        .pendingPageFlip  = m_output->pendingPageFlip(),
+        .pendingIdleFrame = m_output->pendingIdleFrame(),
+    });
 }
 
 static uint64_t scanoutHashCombine(uint64_t hash, uint64_t value) {

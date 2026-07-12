@@ -351,8 +351,11 @@ void CPointerManager::onCursorMoved() {
         if (state->hardwareFailed)
             continue;
 
-        const auto CURSORPOS = getCursorPosForMonitor(m);
-        m->m_output->moveCursor(CURSORPOS, m->shouldSkipScheduleFrameOnMouseEvent());
+        const auto CURSORPOS               = getCursorPosForMonitor(m);
+        const auto CURSOR_SCANOUT_DECISION = m->cursorScanoutDecision();
+        if (CURSOR_SCANOUT_DECISION.scheduleKeepalive)
+            m->scheduleVrrKeepalive();
+        m->m_output->moveCursor(CURSORPOS, CURSOR_SCANOUT_DECISION.skipCursorSchedule);
 
         state->monitor->m_scanoutNeedsCursorUpdate = true;
     }
@@ -367,8 +370,11 @@ bool CPointerManager::attemptHardwareCursor(SP<CPointerManager::SMonitorPointerS
     if (!(output->getBackend()->capabilities() & Aquamarine::IBackendImplementation::eBackendCapabilities::AQ_BACKEND_CAPABILITY_POINTER))
         return false;
 
-    const auto CURSORPOS = getCursorPosForMonitor(state->monitor.lock());
-    state->monitor->m_output->moveCursor(CURSORPOS, state->monitor->shouldSkipScheduleFrameOnMouseEvent());
+    const auto CURSORPOS               = getCursorPosForMonitor(state->monitor.lock());
+    const auto CURSOR_SCANOUT_DECISION = state->monitor->cursorScanoutDecision();
+    if (CURSOR_SCANOUT_DECISION.scheduleKeepalive)
+        state->monitor->scheduleVrrKeepalive();
+    state->monitor->m_output->moveCursor(CURSORPOS, CURSOR_SCANOUT_DECISION.skipCursorSchedule);
 
     auto texture = getCurrentCursorTexture();
 
@@ -411,7 +417,10 @@ bool CPointerManager::setHWCursorBuffer(SP<SMonitorPointerState> state, SP<Aquam
 
     state->cursorFrontBuffer = buf;
 
-    if (!state->monitor->shouldSkipScheduleFrameOnMouseEvent())
+    const auto CURSOR_SCANOUT_DECISION = state->monitor->cursorScanoutDecision();
+    if (CURSOR_SCANOUT_DECISION.scheduleKeepalive)
+        state->monitor->scheduleVrrKeepalive();
+    if (!CURSOR_SCANOUT_DECISION.skipCursorSchedule)
         state->monitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_SHAPE);
 
     state->monitor->m_scanoutNeedsCursorUpdate = true;
@@ -781,7 +790,10 @@ void CPointerManager::damageIfSoftware() {
         if (!usesSoftwareCursor)
             continue;
 
-        auto shouldAddDamage = !monitor->shouldSkipScheduleFrameOnMouseEvent() && b.overlaps({monitor->m_position, monitor->m_size});
+        const auto CURSOR_SCANOUT_DECISION = monitor->cursorScanoutDecision();
+        if (CURSOR_SCANOUT_DECISION.scheduleKeepalive)
+            monitor->scheduleVrrKeepalive();
+        auto shouldAddDamage = !CURSOR_SCANOUT_DECISION.skipCursorSchedule && b.overlaps({monitor->m_position, monitor->m_size});
         if (!shouldAddDamage)
             continue;
 

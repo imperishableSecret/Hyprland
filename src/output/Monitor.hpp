@@ -26,6 +26,7 @@
 #include "../helpers/cm/ColorManagement.hpp"
 #include "../helpers/signal/Signal.hpp"
 #include "DamageRing.hpp"
+#include "ScanoutKeepalive.hpp"
 #include "ScanoutTestCache.hpp"
 #include "FrameSubmission.hpp"
 #include <aquamarine/output/Output.hpp>
@@ -284,7 +285,8 @@ namespace Monitor {
         void         addDamage(const CBox& box);
         void         addCaptureDamage(const CRegion& rg);
         void         scheduleFrame(Aquamarine::IOutput::scheduleFrameReason reason = Aquamarine::IOutput::AQ_SCHEDULE_CLIENT_UNKNOWN);
-        bool         shouldSkipScheduleFrameOnMouseEvent();
+        Monitor::SScanoutCursorDecision cursorScanoutDecision();
+        void         scheduleVrrKeepalive();
         bool         shouldSuppressCursorCommit();
         bool         isVrrKeepaliveDue();
         void         setMirror(const std::string&);

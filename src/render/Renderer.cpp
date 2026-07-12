@@ -3131,7 +3131,10 @@ void IHyprRenderer::ensureCursorRenderingMode() {
         if (!Pointer::mgr()->softwareLockedFor(m))
             continue;
 
-        Pointer::mgr()->damageCursor(m, m->shouldSkipScheduleFrameOnMouseEvent());
+        const auto CURSOR_SCANOUT_DECISION = m->cursorScanoutDecision();
+        if (CURSOR_SCANOUT_DECISION.scheduleKeepalive)
+            m->scheduleVrrKeepalive();
+        Pointer::mgr()->damageCursor(m, CURSOR_SCANOUT_DECISION.skipCursorSchedule);
     }
 
     setCursorHidden(HIDE);
