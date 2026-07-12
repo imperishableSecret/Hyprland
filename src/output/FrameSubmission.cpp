@@ -15,7 +15,7 @@ uint64_t CFrameSubmissionLedger::begin() {
     if (m_staged)
         abort();
 
-    m_staged     = makeUnique<SSubmission>();
+    m_staged.emplace();
     m_staged->id = nextID();
     ++m_stats.staged;
     return m_staged->id;
@@ -46,6 +46,7 @@ uint64_t CFrameSubmissionLedger::beginCommit(bool zeroCopy) {
 
     const auto ID = m_staged->id;
     m_committing  = std::move(m_staged);
+    m_staged.reset();
     return ID;
 }
 
@@ -56,6 +57,7 @@ uint64_t CFrameSubmissionLedger::finishCommit(bool success) {
     const auto ID = m_committing->id;
     if (!success) {
         m_staged = std::move(m_committing);
+        m_committing.reset();
         m_presentationDuringCommit.reset();
         return ID;
     }
@@ -64,11 +66,11 @@ uint64_t CFrameSubmissionLedger::finishCommit(bool success) {
     // is still in flight after a new commit succeeds, that record can no
     // longer receive a matching presentation event. Keeping it would shift
     // every later protocol completion by one frame.
-    for (auto& submission : m_inFlight) {
-        discard(submission);
+    if (m_inFlight) {
+        discard(*m_inFlight);
         ++m_stats.orphaned;
+        m_inFlight.reset();
     }
-    m_inFlight.clear();
 
     submit(*m_committing);
     ++m_stats.submitted;
@@ -80,7 +82,7 @@ uint64_t CFrameSubmissionLedger::finishCommit(bool success) {
         return ID;
     }
 
-    m_inFlight.emplace_back(std::move(*m_committing));
+    m_inFlight = std::move(m_committing);
     m_committing.reset();
     return ID;
 }
@@ -108,13 +110,13 @@ bool CFrameSubmissionLedger::complete(const SFramePresentation& event) {
         return true;
     }
 
-    if (m_inFlight.empty()) {
+    if (!m_inFlight) {
         ++m_stats.orphaned;
         return false;
     }
 
-    auto submission = std::move(m_inFlight.front());
-    m_inFlight.pop_front();
+    auto submission = std::move(*m_inFlight);
+    m_inFlight.reset();
 
     completeSubmission(submission, event);
     return true;
@@ -127,9 +129,10 @@ void CFrameSubmissionLedger::discardAll() {
         m_committing.reset();
     }
     m_presentationDuringCommit.reset();
-    for (auto& submission : m_inFlight)
-        discard(submission);
-    m_inFlight.clear();
+    if (m_inFlight) {
+        discard(*m_inFlight);
+        m_inFlight.reset();
+    }
 }
 
 bool CFrameSubmissionLedger::hasStagedSubmission() const {
@@ -145,7 +148,7 @@ size_t CFrameSubmissionLedger::stagedWorkCount() const {
 }
 
 size_t CFrameSubmissionLedger::inFlightCount() const {
-    return m_inFlight.size();
+    return m_inFlight ? 1 : 0;
 }
 
 uint64_t CFrameSubmissionLedger::stagedID() const {
@@ -153,7 +156,7 @@ uint64_t CFrameSubmissionLedger::stagedID() const {
 }
 
 uint64_t CFrameSubmissionLedger::oldestInFlightID() const {
-    return m_inFlight.empty() ? 0 : m_inFlight.front().id;
+    return m_inFlight ? m_inFlight->id : 0;
 }
 
 uint64_t CFrameSubmissionLedger::presentationTargetID() const {

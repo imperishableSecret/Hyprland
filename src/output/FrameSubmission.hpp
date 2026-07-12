@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
-#include <deque>
 #include <optional>
 #include <vector>
 
@@ -69,10 +68,10 @@ namespace Monitor {
         void                              completeSubmission(SSubmission& submission, const SFramePresentation& event);
 
         uint64_t                          m_nextID = 1;
-        UP<SSubmission>                   m_staged;
-        UP<SSubmission>                   m_committing;
+        std::optional<SSubmission>        m_staged;
+        std::optional<SSubmission>        m_committing;
         std::optional<SFramePresentation> m_presentationDuringCommit;
-        std::deque<SSubmission>           m_inFlight;
+        std::optional<SSubmission>        m_inFlight;
         SStats                            m_stats;
     };
 }

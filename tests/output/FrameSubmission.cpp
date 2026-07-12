@@ -189,3 +189,30 @@ TEST(FrameSubmission, successfulCommitDiscardsStaleInflightSubmission) {
     EXPECT_EQ(CURRENT->presentedCount, 1);
     EXPECT_EQ(CURRENT->lastSequence, 13);
 }
+
+TEST(FrameSubmission, noWorkSubmissionUsesTheInlineInflightSlot) {
+    CFrameSubmissionLedger ledger;
+
+    const auto             ID = ledger.begin();
+    EXPECT_FALSE(ledger.hasStagedWork());
+    EXPECT_EQ(ledger.beginCommit(true), ID);
+    EXPECT_EQ(ledger.finishCommit(true), ID);
+    EXPECT_EQ(ledger.inFlightCount(), 1);
+    EXPECT_TRUE(ledger.complete({.presented = true, .sequence = 14}));
+    EXPECT_EQ(ledger.inFlightCount(), 0);
+
+    const auto STATS = ledger.stats();
+    EXPECT_EQ(STATS.staged, 1);
+    EXPECT_EQ(STATS.submitted, 1);
+    EXPECT_EQ(STATS.presented, 1);
+    EXPECT_EQ(STATS.discarded, 0);
+}
+
+TEST(FrameSubmission, orphanPresentationDoesNotCreateSubmissionState) {
+    CFrameSubmissionLedger ledger;
+
+    EXPECT_FALSE(ledger.complete({.presented = true, .sequence = 15}));
+    EXPECT_EQ(ledger.inFlightCount(), 0);
+    EXPECT_FALSE(ledger.hasStagedSubmission());
+    EXPECT_EQ(ledger.stats().orphaned, 1);
+}
