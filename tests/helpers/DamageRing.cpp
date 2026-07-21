@@ -1,6 +1,7 @@
 #include <output/DamageRing.hpp>
 
 #include <gtest/gtest.h>
+#include <vector>
 
 using namespace Monitor;
 
@@ -247,32 +248,75 @@ TEST(DamageRing, getBufferDamageAccumulatesUpToRingLength) {
     EXPECT_FALSE(buf.empty());
 }
 
-TEST(DamageRing, getBufferDamageCoalescesWhenTooManyRects) {
+static void expectRegionCovers(CRegion& region, const std::vector<pixman_box32_t>& boxes) {
+    for (const auto& box : boxes)
+        EXPECT_EQ(pixman_region32_contains_rectangle(region.pixman(), &box), PIXMAN_REGION_IN);
+}
+
+TEST(DamageRing, getBufferDamageKeepsEightRects) {
     CDamageRing ring;
-    ring.setSize({500, 500});
+    ring.setSize({1000, 100});
     ring.rotate();
 
-    // Add many non-overlapping rects across several frames so that
-    // accumulation produces more than 8 rectangles, triggering the
-    // getExtents() fallback path.
-    int x = 0;
-    for (int frame = 0; frame < DAMAGE_RING_PREVIOUS_LEN; ++frame) {
-        for (int r = 0; r < 4; ++r) {
-            ring.damage(CRegion(x, 0, 5, 5));
-            x += 10;
-        }
-        ring.rotate();
+    std::vector<pixman_box32_t> boxes;
+    for (int i = 0; i < 8; ++i) {
+        const pixman_box32_t box = {
+            .x1 = i * 100,
+            .y1 = 0,
+            .x2 = i * 100 + 5,
+            .y2 = 5,
+        };
+        boxes.emplace_back(box);
+        ring.damage(CRegion(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1));
     }
 
-    // Current frame damage
-    ring.damage(CRegion(x, 0, 5, 5));
+    CRegion result = ring.getBufferDamage(1);
+    EXPECT_EQ(pixman_region32_n_rects(result.pixman()), 8);
+    expectRegionCovers(result, boxes);
+}
 
-    // age = DAMAGE_RING_PREVIOUS_LEN + 1 accumulates all frames
-    CRegion buf = ring.getBufferDamage(DAMAGE_RING_PREVIOUS_LEN + 1);
-    EXPECT_FALSE(buf.empty());
+TEST(DamageRing, getBufferDamageKeepsNineSparseRects) {
+    CDamageRing ring;
+    ring.setSize({1000, 100});
+    ring.rotate();
 
-    // The result should be coalesced into a single extents rect (<=1 rect)
-    EXPECT_LE(buf.getRects().size(), 1);
+    std::vector<pixman_box32_t> boxes;
+    for (int i = 0; i < 9; ++i) {
+        const pixman_box32_t box = {
+            .x1 = i * 100,
+            .y1 = 0,
+            .x2 = i * 100 + 5,
+            .y2 = 5,
+        };
+        boxes.emplace_back(box);
+        ring.damage(CRegion(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1));
+    }
+
+    CRegion result = ring.getBufferDamage(1);
+    EXPECT_EQ(pixman_region32_n_rects(result.pixman()), 9);
+    expectRegionCovers(result, boxes);
+}
+
+TEST(DamageRing, getBufferDamageCoalescesDenseRects) {
+    CDamageRing ring;
+    ring.setSize({100, 100});
+    ring.rotate();
+
+    std::vector<pixman_box32_t> boxes;
+    for (int i = 0; i < 9; ++i) {
+        const pixman_box32_t box = {
+            .x1 = i * 6,
+            .y1 = 0,
+            .x2 = i * 6 + 5,
+            .y2 = 5,
+        };
+        boxes.emplace_back(box);
+        ring.damage(CRegion(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1));
+    }
+
+    CRegion result = ring.getBufferDamage(1);
+    EXPECT_EQ(pixman_region32_n_rects(result.pixman()), 1);
+    expectRegionCovers(result, boxes);
 }
 
 TEST(DamageRing, getBufferDamageEmptyRingReturnsEmptyForValidAge) {
