@@ -624,7 +624,7 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
         CRectPassElement::SRectData data;
         data.color = CHyprColor(0, 0, 0, *PDIMAROUND * fullAlpha);
         data.box   = monbox;
-        addPassElement(makeUnique<CRectPassElement>(data));
+        addPassElement<CRectPassElement>(data);
     }
 
     renderdata.pos.x += pWindow->m_floatingOffset.x;
@@ -646,7 +646,7 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
         const bool      windowBlur = renderdata.blur;
 
         if (TRANSFORMEDWINDOW) {
-            transformedPass = makeUnique<CRenderPass>();
+            transformedPass = makeUnique<CRenderPass>(currentPass());
             passRedirect    = redirectPass(transformedPass.get());
             renderdata.blur = false;
 
@@ -685,7 +685,7 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
             data.blur  = true;
             data.blurA = renderdata.fadeAlpha;
             data.xray  = shouldUseNewBlurOptimizations(nullptr, pWindow);
-            addPassElement(makeUnique<CRectPassElement>(data));
+            addPassElement<CRectPassElement>(data);
             renderdata.blur = false;
         }
 
@@ -702,7 +702,7 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
                 renderdata.texture     = s->m_current.texture;
                 renderdata.surface     = s;
                 renderdata.mainSurface = s == pWindow->wlSurface()->resource();
-                addPassElement(makeUnique<CSurfacePassElement>(renderdata));
+                addPassElement<CSurfacePassElement>(renderdata);
                 renderdata.surfaceCounter++;
             },
             nullptr);
@@ -734,7 +734,7 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
             CBox blurBox = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
             blurBox.scale(pMonitor->m_scale).round();
 
-            addPassElement(makeUnique<CTransformedWindowPassElement>(CTransformedWindowPassElement::SData{
+            addPassElement<CTransformedWindowPassElement>(CTransformedWindowPassElement::SData{
                 .pass              = std::move(transformedPass),
                 .window            = pWindow,
                 .currentBox        = currentBox,
@@ -744,7 +744,7 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
                 .blurRound         = renderdata.dontRound ? 0 : std::max(renderdata.rounding - 1, 0),
                 .blurRoundingPower = renderdata.roundingPower,
                 .motionBlur        = windowMotionBlur,
-            }));
+            });
 
             renderdata.blur = windowBlur;
         }
@@ -798,7 +798,7 @@ void IHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const T
                             renderdata.texture     = s->m_current.texture;
                             renderdata.surface     = s;
                             renderdata.mainSurface = false;
-                            m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+                            addPassElement<CSurfacePassElement>(renderdata);
                             renderdata.surfaceCounter++;
                         },
                         data);
@@ -830,43 +830,56 @@ void IHyprRenderer::draw(WP<IPassElement> element, const CRegion& damage) {
     if (!element)
         return;
 
+    draw(*element, damage);
+}
+
+void IHyprRenderer::draw(IPassElement& element, const CRegion& damage) {
     elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CBorderPassElement::SBorderData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CBorderPassElement>(data), damage);
+    CBorderPassElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CClearPassElement::SClearData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CClearPassElement>(data), damage);
+    CClearPassElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CFramebufferElement::SFramebufferElementData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CFramebufferElement>(data), damage);
+    CFramebufferElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CRectPassElement::SRectData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CRectPassElement>(data), damage);
+    CRectPassElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CRendererHintsPassElement::SData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CRendererHintsPassElement>(data), damage);
+    CRendererHintsPassElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CShadowPassElement::SShadowData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CShadowPassElement>(data), damage);
+    CShadowPassElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CSurfacePassElement::SRenderData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CSurfacePassElement>(data), damage);
+    CSurfacePassElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CTexPassElement::SRenderData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CTexPassElement>(data), damage);
+    CTexPassElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::draw(const CTextureMatteElement::STextureMatteData& data, const CRegion& damage) {
-    elementRenderer()->drawElement(makeUnique<CTextureMatteElement>(data), damage);
+    CTextureMatteElement element{data};
+    elementRenderer()->drawElement(element, damage);
 }
 
 void IHyprRenderer::bindFB(SP<IFramebuffer> fb) {
@@ -951,7 +964,7 @@ void IHyprRenderer::renderLayer(PHLLS pLayer, PHLMONITOR pMonitor, const Time::s
         CRectPassElement::SRectData data;
         data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
         data.color = CHyprColor(0, 0, 0, *PDIMAROUND * pLayer->alpha()[LS_ALPHA_FADE]->value());
-        m_renderPass.add(makeUnique<CRectPassElement>(data));
+        addPassElement<CRectPassElement>(data);
     }
 
     TRACY_GPU_ZONE("RenderLayer");
@@ -988,7 +1001,7 @@ void IHyprRenderer::renderLayer(PHLLS pLayer, PHLMONITOR pMonitor, const Time::s
                 renderdata.texture     = s->m_current.texture;
                 renderdata.surface     = s;
                 renderdata.mainSurface = s == pLayer->wlSurface()->resource();
-                m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+                addPassElement<CSurfacePassElement>(renderdata);
                 renderdata.surfaceCounter++;
             },
             &renderdata);
@@ -1023,7 +1036,7 @@ void IHyprRenderer::renderLayer(PHLLS pLayer, PHLMONITOR pMonitor, const Time::s
                 renderdata.texture     = SURF->m_current.texture;
                 renderdata.surface     = SURF;
                 renderdata.mainSurface = false;
-                m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+                addPassElement<CSurfacePassElement>(renderdata);
                 renderdata.surfaceCounter++;
             },
             &renderdata);
@@ -1064,7 +1077,7 @@ void IHyprRenderer::renderIMEPopup(CInputPopup* pPopup, PHLMONITOR pMonitor, con
             renderdata.texture     = s->m_current.texture;
             renderdata.surface     = s;
             renderdata.mainSurface = s == SURF;
-            m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+            addPassElement<CSurfacePassElement>(renderdata);
             renderdata.surfaceCounter++;
         },
         &renderdata);
@@ -1094,7 +1107,7 @@ void IHyprRenderer::renderSessionLockSurface(WP<SSessionLockSurface> pSurface, P
             renderdata.texture     = s->m_current.texture;
             renderdata.surface     = s;
             renderdata.mainSurface = s == pSurface->surface->surface();
-            m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+            addPassElement<CSurfacePassElement>(renderdata);
             renderdata.surfaceCounter++;
         },
         &renderdata);
@@ -1121,11 +1134,11 @@ void IHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
         RENDERMODIFDATA.modifs.emplace_back(SRenderModifData::eRenderModifType::RMOD_TYPE_SCALE, scale);
 
     if UNLIKELY (!RENDERMODIFDATA.modifs.empty())
-        m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{RENDERMODIFDATA}));
+        addPassElement<CRendererHintsPassElement>(CRendererHintsPassElement::SData{RENDERMODIFDATA});
 
     CScopeGuard x([&RENDERMODIFDATA] {
         if (!RENDERMODIFDATA.modifs.empty()) {
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{SRenderModifData{}}));
+            g_pHyprRenderer->addPassElement<CRendererHintsPassElement>(CRendererHintsPassElement::SData{SRenderModifData{}});
         }
     });
 
@@ -1177,7 +1190,7 @@ void IHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
 
     // pre window pass
     if (preBlurQueued(pMonitor))
-        m_renderPass.add(makeUnique<CPreBlurElement>());
+        addPassElement<CPreBlurElement>();
 
     if UNLIKELY /* subjective? */ (Fullscreen::controller()->hasFullscreen(pWorkspace))
         renderWorkspaceWindowsFullscreen(pMonitor, pWorkspace, time);
@@ -1190,7 +1203,7 @@ void IHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
         data.box   = {translate.x, translate.y, pMonitor->m_transformedSize.x * scale, pMonitor->m_transformedSize.y * scale};
         data.color = CHyprColor(0, 0, 0, pMonitor->m_specialDim->value());
 
-        m_renderPass.add(makeUnique<CRectPassElement>(data));
+        addPassElement<CRectPassElement>(data);
     }
 
     if UNLIKELY (pMonitor->m_specialBlur->value() != 0.F) {
@@ -1200,7 +1213,7 @@ void IHyprRenderer::renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPA
         data.blur  = true;
         data.blurA = pMonitor->m_specialBlur->value();
 
-        m_renderPass.add(makeUnique<CRectPassElement>(data));
+        addPassElement<CRectPassElement>(data);
     }
 
     // special
@@ -1342,7 +1355,7 @@ void IHyprRenderer::renderBackground(PHLMONITOR pMonitor) {
     static auto PNOSPLASH        = CConfigValue<Config::INTEGER>("misc:disable_splash_rendering");
 
     if (*PRENDERTEX /* inverted cfg flag */ || pMonitor->m_backgroundOpacity->isBeingAnimated())
-        m_renderPass.add(makeUnique<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(*PBACKGROUNDCOLOR)}));
+        addPassElement<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(*PBACKGROUNDCOLOR)});
 
     if (!*PRENDERTEX) {
         static auto PBACKGROUNDCOLOR = CConfigValue<Config::INTEGER>("misc:background_color");
@@ -1351,7 +1364,7 @@ void IHyprRenderer::renderBackground(PHLMONITOR pMonitor) {
             pMonitor->m_background = getBackground(pMonitor);
 
         if (!pMonitor->m_background)
-            m_renderPass.add(makeUnique<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(*PBACKGROUNDCOLOR)}));
+            addPassElement<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(*PBACKGROUNDCOLOR)});
         else {
             CTexPassElement::SRenderData data;
             const double                 MONRATIO = m_renderData.pMonitor->m_transformedSize.x / m_renderData.pMonitor->m_transformedSize.y;
@@ -1368,12 +1381,12 @@ void IHyprRenderer::renderBackground(PHLMONITOR pMonitor) {
             }
 
             if (MONRATIO != WPRATIO)
-                m_renderPass.add(makeUnique<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(*PBACKGROUNDCOLOR)}));
+                addPassElement<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(*PBACKGROUNDCOLOR)});
 
             data.box = {origin, pMonitor->m_background->m_size * scale};
             data.a   = m_renderData.pMonitor->m_backgroundOpacity->value();
             data.tex = pMonitor->m_background;
-            m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+            addPassElement<CTexPassElement>(std::move(data));
         }
     }
 
@@ -1387,7 +1400,7 @@ void IHyprRenderer::renderBackground(PHLMONITOR pMonitor) {
             CTexPassElement::SRenderData data;
             data.box = {{(monitorSize.x - pMonitor->m_splash->m_size.x) / 2.0, monitorSize.y * 0.98 - pMonitor->m_splash->m_size.y}, pMonitor->m_splash->m_size};
             data.tex = pMonitor->m_splash;
-            m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+            addPassElement<CTexPassElement>(std::move(data));
         }
     }
 }
@@ -1680,7 +1693,7 @@ void IHyprRenderer::renderSessionLockPrimer(PHLMONITOR pMonitor) {
     data.color = CHyprColor(0, 0, 0, 1.f);
     data.box   = CBox{{}, pMonitor->m_pixelSize};
 
-    m_renderPass.add(makeUnique<CRectPassElement>(data));
+    addPassElement<CRectPassElement>(data);
 }
 
 void IHyprRenderer::renderSessionLockMissing(PHLMONITOR pMonitor) {
@@ -1700,7 +1713,7 @@ void IHyprRenderer::renderSessionLockMissing(PHLMONITOR pMonitor) {
     data.box = monbox;
     data.a   = 1;
 
-    m_renderPass.add(makeUnique<CTexPassElement>(data));
+    addPassElement<CTexPassElement>(data);
 
     if (!ANY_PRESENT && m_lockTtyTextTexture) {
         // also render text for the tty number
@@ -1708,7 +1721,7 @@ void IHyprRenderer::renderSessionLockMissing(PHLMONITOR pMonitor) {
         data.tex    = m_lockTtyTextTexture;
         data.box    = texbox;
 
-        m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+        addPassElement<CTexPassElement>(std::move(data));
     }
 }
 
@@ -2032,14 +2045,14 @@ void IHyprRenderer::renderMirrored() {
 
     const auto MIRROR_TEX = mirrored->resources()->getMirrorTexture();
 
-    m_renderPass.add(makeUnique<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(0, 0, 0, 0)}));
+    addPassElement<CClearPassElement>(CClearPassElement::SClearData{CHyprColor(0, 0, 0, 0)});
 
     CTexPassElement::SRenderData data;
     data.tex                 = MIRROR_TEX;
     data.box                 = monbox;
     data.useMirrorProjection = true;
 
-    m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+    addPassElement<CTexPassElement>(std::move(data));
 }
 
 CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
@@ -2228,7 +2241,7 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
                 CRectPassElement::SRectData data;
                 data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
                 data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
-                m_renderPass.add(makeUnique<CRectPassElement>(data));
+                addPassElement<CRectPassElement>(data);
                 damageBlinkCleanup = 1;
             } else if (*PDAMAGEBLINK) {
                 damageBlinkCleanup++;
@@ -2255,7 +2268,7 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         CRectPassElement::SRectData data;
         data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
         data.color = Colors::BLACK.modifyA(pMonitor->m_dpmsBlackOpacity->value());
-        m_renderPass.add(makeUnique<CRectPassElement>(data));
+        addPassElement<CRectPassElement>(data);
     }
 
     Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
@@ -3276,7 +3289,7 @@ SP<IFramebuffer> IHyprRenderer::makeSnapshotFB(WP<Desktop::View::CPopup> popup) 
             renderdata.texture     = s->m_current.texture;
             renderdata.surface     = s;
             renderdata.mainSurface = false;
-            m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+            addPassElement<CSurfacePassElement>(renderdata);
             renderdata.surfaceCounter++;
         },
         nullptr);
@@ -3316,7 +3329,7 @@ void IHyprRenderer::renderFadeouts(PHLMONITOR monitor, Desktop::eFadeoutPlane pl
             CRectPassElement::SRectData data;
             data.box   = {0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y};
             data.color = CHyprColor(0, 0, 0, EFFECTS.dimAroundAlpha);
-            m_renderPass.add(makeUnique<CRectPassElement>(data));
+            addPassElement<CRectPassElement>(data);
         }
 
         if (EFFECTS.preBlur) {
@@ -3328,7 +3341,7 @@ void IHyprRenderer::renderFadeouts(PHLMONITOR monitor, Desktop::eFadeoutPlane pl
             data.round         = EFFECTS.preBlur->round;
             data.roundingPower = EFFECTS.preBlur->roundingPower;
             data.xray          = EFFECTS.preBlur->xray;
-            m_renderPass.add(makeUnique<CRectPassElement>(data));
+            addPassElement<CRectPassElement>(data);
         }
 
         CTexPassElement::SRenderData data;
@@ -3343,7 +3356,7 @@ void IHyprRenderer::renderFadeouts(PHLMONITOR monitor, Desktop::eFadeoutPlane pl
         data.ignoreAlpha           = EFFECTS.textureBlur.ignoreAlpha;
         data.blockBlurOptimization = EFFECTS.textureBlur.blockBlurOptimization;
 
-        m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+        addPassElement<CTexPassElement>(std::move(data));
     }
 }
 

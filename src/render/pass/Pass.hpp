@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../defines.hpp"
+#include "PassElementArena.hpp"
 #include "PassElement.hpp"
 
 class CGradientValueData;
@@ -10,10 +11,21 @@ namespace Render {
 
     class CRenderPass {
       public:
-        bool    empty() const;
-        bool    single() const;
+        CRenderPass();
+        explicit CRenderPass(CRenderPass& parent);
+        ~CRenderPass();
 
-        void    add(UP<IPassElement>&& elem);
+        bool empty() const;
+        bool single() const;
+
+        void add(UP<IPassElement>&& elem);
+        template <typename T, typename... Args>
+        T& emplace(Args&&... args) {
+            auto        handle  = m_elementArena->emplace<T>(std::forward<Args>(args)...);
+            auto* const ELEMENT = sc<T*>(handle.get());
+            m_passElements.emplace_back(SPassElementData{.elementDamage = CRegion{}, .arenaElement = std::move(handle)});
+            return *ELEMENT;
+        }
         void    clear();
         void    removeAllOfType(const std::string& type);
 
@@ -25,12 +37,18 @@ namespace Render {
         CRegion              m_totalLiveBlurRegion;
 
         struct SPassElementData {
-            CRegion          elementDamage;
-            UP<IPassElement> element;
-            bool             discard = false;
+            CRegion                    elementDamage;
+            CPassElementArena::CHandle arenaElement;
+            UP<IPassElement>           ownedElement;
+            bool                       discard = false;
+
+            IPassElement*              element() const;
+            void                       reset();
         };
 
         std::vector<SPassElementData> m_passElements;
+        UP<CPassElementArena>         m_ownedElementArena;
+        CPassElementArena*            m_elementArena = nullptr;
 
         void                          simplify(bool willBlur, const CRegion& liveBlurRegion);
         float                         oneBlurRadius();

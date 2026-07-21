@@ -680,7 +680,7 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
     data.tex = texture;
     data.box = box.round();
 
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+    g_pHyprRenderer->addPassElement<CTexPassElement>(std::move(data));
 
     // to erase the leftover in updateCursorBackend()
     if (!forceRender) {

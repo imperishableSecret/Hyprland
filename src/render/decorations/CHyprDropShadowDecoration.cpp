@@ -86,7 +86,7 @@ void CHyprDropShadowDecoration::draw(PHLMONITOR pMonitor, float const& a) {
     CShadowPassElement::SShadowData data;
     data.deco = this;
     data.a    = a;
-    g_pHyprRenderer->addPassElement(makeUnique<CShadowPassElement>(data));
+    g_pHyprRenderer->addPassElement<CShadowPassElement>(data);
 }
 
 bool CHyprDropShadowDecoration::canRender(PHLMONITOR pMonitor) {
