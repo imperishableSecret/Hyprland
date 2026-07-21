@@ -6,6 +6,7 @@
 #include <xf86drm.h>
 #include <drm_fourcc.h>
 #include <hyprgraphics/egl/Egl.hpp>
+#include <algorithm>
 #include <limits>
 
 using namespace Hyprgraphics::Egl;
@@ -48,6 +49,12 @@ bool NFormatUtils::isFormatYUV(uint32_t drmFormat) {
         case DRM_FORMAT_YUV444: return true;
         default: return false;
     }
+}
+
+bool NFormatUtils::isFormatModifierSupported(std::span<const SDRMFormat> formats, DRMFormat format, uint64_t modifier) {
+    return std::ranges::any_of(formats, [format, modifier](const auto& candidate) {
+        return candidate.drmFormat == format && std::ranges::find(candidate.modifiers, modifier) != candidate.modifiers.end();
+    });
 }
 
 bool NFormatUtils::isShmBufferLayoutValid(DRMFormat drmFormat, const Vector2D& size, int32_t stride, int32_t offset, size_t poolSize) {

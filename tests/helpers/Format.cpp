@@ -6,6 +6,7 @@
 #include <wayland-server-protocol.h>
 #include <hyprgraphics/egl/Egl.hpp>
 #include <limits>
+#include <vector>
 
 using namespace Hyprgraphics::Egl;
 using namespace NFormatUtils;
@@ -31,6 +32,24 @@ TEST(Helpers, formatIsFormatYUV) {
     EXPECT_TRUE(isFormatYUV(DRM_FORMAT_NV21));
     EXPECT_FALSE(isFormatYUV(DRM_FORMAT_XRGB8888));
     EXPECT_FALSE(isFormatYUV(DRM_FORMAT_ARGB8888));
+}
+
+TEST(Helpers, formatModifierSupportRequiresExactPair) {
+    const std::vector<SDRMFormat> formats = {
+        {.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, 10}},
+        {.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {20}},
+    };
+
+    EXPECT_TRUE(isFormatModifierSupported(formats, DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR));
+    EXPECT_TRUE(isFormatModifierSupported(formats, DRM_FORMAT_XRGB8888, 10));
+    EXPECT_TRUE(isFormatModifierSupported(formats, DRM_FORMAT_ARGB8888, 20));
+    EXPECT_FALSE(isFormatModifierSupported(formats, DRM_FORMAT_XRGB8888, 20));
+    EXPECT_FALSE(isFormatModifierSupported(formats, DRM_FORMAT_ARGB8888, 10));
+    EXPECT_FALSE(isFormatModifierSupported(formats, DRM_FORMAT_XBGR8888, DRM_FORMAT_MOD_LINEAR));
+}
+
+TEST(Helpers, formatModifierSupportRejectsEmptyCapabilities) {
+    EXPECT_FALSE(isFormatModifierSupported({}, DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR));
 }
 
 TEST(Helpers, formatGetPixelFormatFromDRM) {

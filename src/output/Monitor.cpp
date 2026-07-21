@@ -2084,6 +2084,13 @@ uint16_t CMonitor::isDSBlocked(bool full) {
         reasons |= DS_BLOCK_DMA;
         if (!full)
             return reasons;
+    } else {
+        const auto RENDER_FORMATS = m_output->getRenderFormats();
+        if (!NFormatUtils::isFormatModifierSupported(RENDER_FORMATS, params.format, params.modifier)) {
+            reasons |= DS_BLOCK_FORMAT;
+            if (!full)
+                return reasons;
+        }
     }
 
     const bool surfaceIsHDR   = PSURFACE->m_colorManagement.valid() && PSURFACE->m_colorManagement->isHDR();
