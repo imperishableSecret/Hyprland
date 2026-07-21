@@ -37,6 +37,7 @@
 #include "../helpers/CursorShapes.hpp"
 #include "../helpers/MainLoopExecutor.hpp"
 #include "../output/Monitor.hpp"
+#include "../output/DirectScanoutPolicy.hpp"
 #include "../state/MonitorState.hpp"
 #include "../state/WorkspaceState.hpp"
 #include "macros.hpp"
@@ -2742,6 +2743,32 @@ void IHyprRenderer::damageSurface(SP<CWLSurfaceResource> pSurface, double x, dou
     if (!WLSURF) {
         Log::logger->log(Log::ERR, "BUG THIS: No CWLSurface for surface in damageSurface!!!");
         return;
+    }
+
+    const auto WINDOW  = Desktop::View::CWindow::fromView(WLSURF->view());
+    const auto MONITOR = WINDOW ? WINDOW->m_monitor.lock() : nullptr;
+    if (MONITOR) {
+        const auto SCANOUT_WINDOW    = MONITOR->m_lastScanout.lock();
+        const bool EXACT_ACTIVE_ROOT = MONITOR->m_directScanoutIsActive && MONITOR->m_activeScanoutSurface.lock() == pSurface && SCANOUT_WINDOW == WINDOW &&
+            MONITOR->m_solitaryClient.lock() == WINDOW && WINDOW->getSolitaryResource() == pSurface;
+        uint8_t blockers = Monitor::DS_DAMAGE_BLOCK_NONE;
+        if (EXACT_ACTIVE_ROOT) {
+            if (!MONITOR->m_mirrors.empty() || MONITOR->isMirror())
+                blockers |= Monitor::DS_DAMAGE_BLOCK_MIRROR;
+            if (Pointer::mgr()->softwareLockedFor(MONITOR))
+                blockers |= Monitor::DS_DAMAGE_BLOCK_SOFTWARE_CURSOR;
+            if (m_directScanoutBlocked)
+                blockers |= Monitor::DS_DAMAGE_BLOCK_GLOBAL_CAPTURE;
+        }
+
+        if (Monitor::canBypassCompositorDamage({
+                .exactActiveRoot = EXACT_ACTIVE_ROOT,
+                .blockers        = blockers,
+            })) {
+            pSurface->m_current.accumulateBufferDamage();
+            MONITOR->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
+            return;
+        }
     }
 
     // hack: schedule frame events

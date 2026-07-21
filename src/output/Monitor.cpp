@@ -404,6 +404,7 @@ void CMonitor::onDisconnect(bool destroy) {
 
     m_frameScheduler.reset();
     clearModeRetry();
+    m_activeScanoutSurface.reset();
 
     if (!m_enabled || g_pCompositor->m_isShuttingDown)
         return;
@@ -2147,6 +2148,7 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
             Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursor: {}, keepalive: {}, output state: {}", CURSOR_COMMIT_DUE, VRR_KEEPALIVE_DUE,
                              OUTPUT_STATE_COMMIT_DUE);
             m_lastScanout.reset();
+            m_activeScanoutSurface.reset();
             return false;
         }
 
@@ -2167,11 +2169,14 @@ bool CMonitor::attemptDirectScanout() {
     if (blockedReason)
         return false;
 
-    const auto PCANDIDATE = m_solitaryClient.lock();
-    const auto PSURFACE   = PCANDIDATE->getSolitaryResource();
-    auto       PBUFFER    = PSURFACE->m_current.buffer.m_buffer;
+    const auto PCANDIDATE           = m_solitaryClient.lock();
+    const auto PSURFACE             = PCANDIDATE->getSolitaryResource();
+    auto       PBUFFER              = PSURFACE->m_current.buffer.m_buffer;
+    const auto LAST_SCANOUT         = m_lastScanout.lock();
+    const bool OWNERSHIP_TRANSITION = LAST_SCANOUT && LAST_SCANOUT != PCANDIDATE;
+    const bool SAME_OWNER           = LAST_SCANOUT == PCANDIDATE && m_activeScanoutSurface.lock() == PSURFACE;
 
-    if (PBUFFER == m_output->state->state().buffer && *PSAME)
+    if (PBUFFER == m_output->state->state().buffer && *PSAME && SAME_OWNER)
         return attemptDirectScanoutSameBuffer(PSURFACE, PBUFFER);
 
     const auto params = PSURFACE->m_current.buffer->dmabuf();
@@ -2201,7 +2206,7 @@ bool CMonitor::attemptDirectScanout() {
         m_output->state->resetExplicitFences();
     }};
 
-    const bool  NEEDS_TEST = !m_lastScanout || m_drmFormat != params.format; // do not retest while it's active
+    const bool  NEEDS_TEST = OWNERSHIP_TRANSITION || !m_lastScanout || m_drmFormat != params.format; // do not retest while it's active
     if (m_drmFormat != params.format) {
         m_output->state->setFormat(params.format);
         m_drmFormat = params.format;
@@ -2214,6 +2219,10 @@ bool CMonitor::attemptDirectScanout() {
 
     if (NEEDS_TEST && !m_state.test()) {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed basic test");
+        if (OWNERSHIP_TRANSITION) {
+            m_lastScanout.reset();
+            m_activeScanoutSurface.reset();
+        }
         return false;
     }
 
@@ -2242,15 +2251,17 @@ bool CMonitor::attemptDirectScanout() {
     if (!ok) {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed to scanout surface");
         m_lastScanout.reset();
+        m_activeScanoutSurface.reset();
         return false;
     }
 
     scanoutCommitted = true;
 
-    if (m_lastScanout.expired()) {
+    if (m_lastScanout.expired() || OWNERSHIP_TRANSITION) {
         m_lastScanout = PCANDIDATE;
         Log::logger->log(Log::DEBUG, "Entered a direct scanout to {:x}: \"{}\"", rc<uintptr_t>(PCANDIDATE.get()), PCANDIDATE->m_title);
     }
+    m_activeScanoutSurface = PSURFACE;
 
     m_scanoutNeedsCursorUpdate = false;
 
@@ -2271,6 +2282,7 @@ bool CMonitor::attemptDirectScanout() {
 void CMonitor::handleDSleave() {
     Log::logger->log(Log::DEBUG, "Left a direct scanout.");
     m_lastScanout.reset();
+    m_activeScanoutSurface.reset();
     m_previousFSWindow.reset(); // recalc fs settings
     m_directScanoutIsActive = false;
 
