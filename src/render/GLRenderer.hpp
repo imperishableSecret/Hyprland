@@ -46,6 +46,7 @@ namespace Render::GL {
         bool                 beginFullFakeRenderInternal(PHLMONITOR pMonitor, CRegion& damage, SP<IFramebuffer> fb, bool simple = false) override;
         void                 initRender() override;
         bool                 initRenderBuffer(SP<Aquamarine::IBuffer> buffer, uint32_t fmt) override;
+        void                 resetRenderBuffer() override;
 
         SP<ITexture>         getBlurTexture(PHLMONITORREF pMonitor) override;
 

@@ -1731,7 +1731,20 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
     if (m_renderMode == RENDER_MODE_FULL_FAKE)
         return beginFullFakeRenderInternal(pMonitor, damage, fb, simple);
 
-    int bufferAge = 0;
+    int         bufferAge               = 0;
+    bool        acquiredSwapchainBuffer = false;
+    bool        renderSetupComplete     = false;
+
+    CScopeGuard failedSetupGuard([&]() {
+        if (renderSetupComplete)
+            return;
+
+        if (acquiredSwapchainBuffer)
+            pMonitor->m_output->swapchain->rollback();
+
+        resetRenderBuffer();
+        m_currentBuffer.reset();
+    });
 
     if (!buffer) {
         m_currentBuffer = pMonitor->m_output->swapchain->next(&bufferAge);
@@ -1739,6 +1752,7 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
             Log::logger->log(Log::ERR, "Failed to acquire swapchain buffer for {}", pMonitor->m_name);
             return false;
         }
+        acquiredSwapchainBuffer = true;
     } else
         m_currentBuffer = buffer;
 
@@ -1751,20 +1765,30 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
 
     if (m_renderMode == RENDER_MODE_NORMAL) {
         damage = pMonitor->m_damage.getBufferDamage(bufferAge);
-        pMonitor->m_damage.rotate();
 
         if (pMonitor->needsACopyFB())
             damage.add(pMonitor->resources()->pendingMirrorFBDamage());
     }
 
-    const auto  res     = beginRenderInternal(pMonitor, damage, simple);
+    if (!beginRenderInternal(pMonitor, damage, simple))
+        return false;
+
+    if (m_renderMode == RENDER_MODE_NORMAL)
+        pMonitor->m_damage.rotate();
+
+    renderSetupComplete = true;
+
     static bool initial = true;
     if (initial) {
         initAssets();
         initial = false;
     }
 
-    return res;
+    return true;
+}
+
+void IHyprRenderer::resetRenderBuffer() {
+    ;
 }
 
 void IHyprRenderer::setDamage(const CRegion& damage_, std::optional<CRegion> finalDamage) {
@@ -2077,7 +2101,16 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     Event::bus()->m_events.render.stage.emit(RENDER_PRE);
 
-    pMonitor->m_renderingActive = true;
+    pMonitor->m_renderingActive      = true;
+    bool        renderSetupSucceeded = false;
+    CScopeGuard renderingGuard([&]() {
+        pMonitor->m_renderingActive = false;
+        if (renderSetupSucceeded)
+            return;
+
+        pMonitor->m_pendingFrame = false;
+        pMonitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
+    });
 
     // Most frames have no fading-out windows or layers for this monitor.
     if (!Desktop::fadingOutState()->fadeouts().empty())
@@ -2112,6 +2145,7 @@ void IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
         return;
     }
+    renderSetupSucceeded = true;
 
     // if we have no tracking or full tracking, invalidate the entire monitor
     if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
