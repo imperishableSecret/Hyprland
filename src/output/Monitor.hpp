@@ -290,6 +290,7 @@ namespace Monitor {
         void         handleDSleave();
         bool         canAttemptDirectScanoutFast() const;
         bool         isMultiGPU();
+        void         resetExplicitFences();
         void         setCTM(const Mat3x3& ctm);
         void         onCursorMovedOnMonitor();
         void         setDPMS(bool on);

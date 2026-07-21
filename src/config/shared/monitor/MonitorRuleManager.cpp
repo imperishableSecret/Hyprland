@@ -203,7 +203,7 @@ void CMonitorRuleManager::ensureVRR(PHLMONITOR pMonitor) {
 
         if (USEVRR == 0) {
             if (m->m_vrrActive) {
-                m->m_output->state->resetExplicitFences();
+                m->resetExplicitFences();
                 m->m_output->state->setAdaptiveSync(false);
 
                 if (!m->m_state.commit())
@@ -222,7 +222,7 @@ void CMonitorRuleManager::ensureVRR(PHLMONITOR pMonitor) {
 
             if (wantVRR) {
                 if (!m->m_vrrActive) {
-                    m->m_output->state->resetExplicitFences();
+                    m->resetExplicitFences();
                     m->m_output->state->setAdaptiveSync(true);
 
                     if (!m->m_state.test()) {
@@ -236,7 +236,7 @@ void CMonitorRuleManager::ensureVRR(PHLMONITOR pMonitor) {
                 m->m_vrrActive = true;
             } else {
                 if (m->m_vrrActive) {
-                    m->m_output->state->resetExplicitFences();
+                    m->resetExplicitFences();
                     m->m_output->state->setAdaptiveSync(false);
 
                     if (!m->m_state.commit())
