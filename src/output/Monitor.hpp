@@ -287,6 +287,7 @@ namespace Monitor {
         bool         updateTearing();
         uint16_t     isDSBlocked(bool full = false);
         bool         attemptDirectScanout();
+        bool         commitOutput(bool zeroCopy = false);
         void         handleDSleave();
         bool         canAttemptDirectScanoutFast() const;
         bool         isMultiGPU();

@@ -87,12 +87,14 @@ void CPresentationFeedback::sendDiscarded() {
 
 CPresentationProtocol::CPresentationProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
     static auto P = Event::bus()->m_events.monitor.removed.listen([this](PHLMONITOR mon) {
-        for (auto& data : m_queue) {
-            if (!data->m_surface || data->m_monitor == mon)
-                discardFeedbacks(data->m_feedbacks);
-        }
+        const auto STATE = outputStateFor(mon);
+        if (!STATE)
+            return;
 
-        std::erase_if(m_queue, [mon](const auto& other) { return !other->m_surface || other->m_monitor == mon; });
+        for (auto& submission : STATE->submissions)
+            discardSubmission(submission);
+
+        std::erase_if(m_outputStates, [mon](const auto& state) { return state.monitor == mon; });
     });
 }
 
@@ -131,24 +133,7 @@ void CPresentationProtocol::onGetFeedback(CWpPresentation* pMgr, wl_resource* su
     }
 }
 
-void CPresentationProtocol::onPresented(PHLMONITOR pMonitor, const timespec& when, uint32_t untilRefreshNs, uint64_t seq, uint32_t reportedFlags) {
-    for (auto const& data : m_queue) {
-        if (!data->m_surface || !data->m_monitor) {
-            discardFeedbacks(data->m_feedbacks);
-            continue;
-        }
-
-        if (data->m_monitor != pMonitor)
-            continue;
-
-        for (auto const& feedback : data->m_feedbacks) {
-            if (!feedback || feedback->m_done)
-                continue;
-
-            feedback->sendQueued(data, when, untilRefreshNs, seq, reportedFlags);
-        }
-    }
-
+void CPresentationProtocol::removeDoneFeedbacks() {
     if (m_feedbacks.size() > 10000) {
         LOGM(Log::ERR, "FIXME: presentation has a feedback leak, and has grown to {} pending entries!!! Dropping!!!!!", m_feedbacks.size());
 
@@ -164,11 +149,177 @@ void CPresentationProtocol::onPresented(PHLMONITOR pMonitor, const timespec& whe
     }
 
     std::erase_if(m_feedbacks, [](const auto& other) { return !other->m_surface || other->m_done; });
-    std::erase_if(m_queue, [pMonitor](const auto& other) { return !other->m_surface || other->m_monitor == pMonitor || !other->m_monitor; });
+}
+
+CPresentationProtocol::SOutputPresentationState* CPresentationProtocol::outputStateFor(PHLMONITOR pMonitor, bool create) {
+    if (!pMonitor)
+        return nullptr;
+
+    const auto STATE = std::ranges::find_if(m_outputStates, [pMonitor](const auto& state) { return state.monitor == pMonitor; });
+    if (STATE != m_outputStates.end())
+        return &*STATE;
+
+    if (!create)
+        return nullptr;
+
+    return &m_outputStates.emplace_back(SOutputPresentationState{.monitor = pMonitor});
+}
+
+void CPresentationProtocol::discardSubmission(SSubmission& submission) {
+    for (auto& data : submission.data) {
+        if (data)
+            discardFeedbacks(data->m_feedbacks);
+    }
+
+    submission.data.clear();
+}
+
+void CPresentationProtocol::beginOutputFrame(PHLMONITOR pMonitor) {
+    const auto STATE = outputStateFor(pMonitor);
+    if (!STATE)
+        return;
+
+    for (auto& submission : STATE->submissions) {
+        if (submission.state == SUBMISSION_STAGED)
+            discardSubmission(submission);
+    }
+
+    std::erase_if(STATE->submissions, [](const auto& submission) { return submission.state == SUBMISSION_STAGED; });
 }
 
 void CPresentationProtocol::queueData(UP<CQueuedPresentationData>&& data) {
-    m_queue.emplace_back(std::move(data));
+    if (!data || !data->m_monitor) {
+        if (data)
+            discardFeedbacks(data->m_feedbacks);
+        return;
+    }
+
+    const auto STATE      = outputStateFor(data->m_monitor.lock(), true);
+    const auto SUBMISSION = std::ranges::find_if(STATE->submissions, [](const auto& submission) { return submission.state == SUBMISSION_STAGED; });
+    if (SUBMISSION != STATE->submissions.end()) {
+        SUBMISSION->data.emplace_back(std::move(data));
+        return;
+    }
+
+    auto& submission = STATE->submissions.emplace_back();
+    submission.data.emplace_back(std::move(data));
+}
+
+bool CPresentationProtocol::hasStagedData(PHLMONITOR pMonitor) const {
+    const auto STATE = std::ranges::find_if(m_outputStates, [pMonitor](const auto& state) { return state.monitor == pMonitor; });
+    return STATE != m_outputStates.end() && hasStagedData(*STATE);
+}
+
+bool CPresentationProtocol::hasStagedData(const SOutputPresentationState& outputState) {
+    return std::ranges::any_of(outputState.submissions, [](const auto& submission) { return submission.state == SUBMISSION_STAGED && !submission.data.empty(); });
+}
+
+uint64_t CPresentationProtocol::beginOutputCommit(PHLMONITOR pMonitor, bool bufferCommitted, bool zeroCopy) {
+    const auto STATE = outputStateFor(pMonitor);
+    return STATE ? beginOutputCommit(*STATE, bufferCommitted, zeroCopy) : 0;
+}
+
+uint64_t CPresentationProtocol::beginOutputCommit(SOutputPresentationState& outputState, bool bufferCommitted, bool zeroCopy) {
+    if (!bufferCommitted)
+        return 0;
+
+    const auto SUBMISSION = std::ranges::find_if(outputState.submissions, [](const auto& submission) { return submission.state == SUBMISSION_STAGED && !submission.data.empty(); });
+    if (SUBMISSION == outputState.submissions.end())
+        return 0;
+
+    if (outputState.nextID == 0)
+        outputState.nextID = 1;
+
+    SUBMISSION->id       = outputState.nextID++;
+    SUBMISSION->state    = SUBMISSION_COMMITTING;
+    SUBMISSION->zeroCopy = zeroCopy;
+
+    if (outputState.nextID == 0)
+        outputState.nextID = 1;
+
+    return SUBMISSION->id;
+}
+
+void CPresentationProtocol::finishOutputCommit(PHLMONITOR pMonitor, uint64_t id, bool success) {
+    if (id == 0)
+        return;
+
+    const auto STATE = outputStateFor(pMonitor);
+    if (!STATE)
+        return;
+
+    finishOutputCommit(*STATE, id, success);
+}
+
+void CPresentationProtocol::finishOutputCommit(SOutputPresentationState& outputState, uint64_t id, bool success) {
+    const auto SUBMISSION = submissionFor(outputState, id);
+    if (!SUBMISSION)
+        return;
+
+    if (success) {
+        SUBMISSION->state = SUBMISSION_ACCEPTED;
+        return;
+    }
+
+    SUBMISSION->id       = 0;
+    SUBMISSION->state    = SUBMISSION_STAGED;
+    SUBMISSION->zeroCopy = false;
+}
+
+CPresentationProtocol::SSubmission* CPresentationProtocol::submissionFor(SOutputPresentationState& outputState, uint64_t id) {
+    const auto SUBMISSION = std::ranges::find_if(outputState.submissions, [id](const auto& submission) { return submission.id == id; });
+    return SUBMISSION == outputState.submissions.end() ? nullptr : &*SUBMISSION;
+}
+
+void CPresentationProtocol::onPresented(PHLMONITOR pMonitor, uint64_t id, const timespec& when, uint32_t untilRefreshNs, uint64_t seq, uint32_t reportedFlags) {
+    if (id == 0)
+        return;
+
+    const auto STATE = outputStateFor(pMonitor);
+    if (!STATE)
+        return;
+
+    const auto SUBMISSION = submissionFor(*STATE, id);
+    if (!SUBMISSION) {
+        LOGM(Log::TRACE, "Ignoring presentation event for unknown output submission {}", id);
+        return;
+    }
+
+    for (auto const& data : SUBMISSION->data) {
+        if (!data || !data->m_surface || !data->m_monitor) {
+            if (data)
+                discardFeedbacks(data->m_feedbacks);
+            continue;
+        }
+
+        data->setPresentationType(SUBMISSION->zeroCopy && (reportedFlags & Aquamarine::IOutput::AQ_OUTPUT_PRESENT_ZEROCOPY));
+        for (auto const& feedback : data->m_feedbacks) {
+            if (feedback && !feedback->m_done)
+                feedback->sendQueued(data, when, untilRefreshNs, seq, reportedFlags);
+        }
+    }
+
+    std::erase_if(STATE->submissions, [id](const auto& submission) { return submission.id == id; });
+    removeDoneFeedbacks();
+}
+
+void CPresentationProtocol::onDiscarded(PHLMONITOR pMonitor, uint64_t id) {
+    if (id == 0)
+        return;
+
+    const auto STATE = outputStateFor(pMonitor);
+    if (!STATE)
+        return;
+
+    const auto SUBMISSION = submissionFor(*STATE, id);
+    if (!SUBMISSION) {
+        LOGM(Log::TRACE, "Ignoring discard event for unknown output submission {}", id);
+        return;
+    }
+
+    discardSubmission(*SUBMISSION);
+    std::erase_if(STATE->submissions, [id](const auto& submission) { return submission.id == id; });
+    removeDoneFeedbacks();
 }
 
 void CPresentationProtocol::discardFeedbacks(std::vector<WP<CPresentationFeedback>>& feedbacks) {
@@ -180,7 +331,7 @@ void CPresentationProtocol::discardFeedbacks(std::vector<WP<CPresentationFeedbac
     }
 
     feedbacks.clear();
-    std::erase_if(m_feedbacks, [](const auto& other) { return !other->m_surface || other->m_done; });
+    removeDoneFeedbacks();
 }
 
 void CPresentationProtocol::discardFeedbacksForSurface(WP<CWLSurfaceResource> surface) {
@@ -194,8 +345,15 @@ void CPresentationProtocol::discardFeedbacksForSurface(WP<CWLSurfaceResource> su
         feedback->sendDiscarded();
     }
 
-    std::erase_if(m_queue, [surface](const auto& other) { return !other->m_surface || other->m_surface == surface; });
-    std::erase_if(m_feedbacks, [](const auto& other) { return !other->m_surface || other->m_done; });
+    for (auto& state : m_outputStates) {
+        for (auto& submission : state.submissions)
+            std::erase_if(submission.data, [surface](const auto& data) { return !data || !data->m_surface || data->m_surface == surface; });
+
+        std::erase_if(state.submissions, [](const auto& submission) { return submission.data.empty(); });
+    }
+
+    std::erase_if(m_outputStates, [](const auto& state) { return state.submissions.empty(); });
+    removeDoneFeedbacks();
 }
 
 bool CPresentationProtocol::hasPendingFeedbacks() const {

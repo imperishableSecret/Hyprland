@@ -159,7 +159,12 @@ void CMonitor::onConnect(bool noRule) {
             flags &= ~Aquamarine::IOutput::AQ_OUTPUT_PRESENT_HW_CLOCK;
         }
 
-        PROTO::presentation->onPresented(m_self.lock(), ts, event.refresh, event.seq, flags);
+        if (event.presentationID != 0) {
+            if (event.presented)
+                PROTO::presentation->onPresented(m_self.lock(), event.presentationID, ts, event.refresh, event.seq, flags);
+            else
+                PROTO::presentation->onDiscarded(m_self.lock(), event.presentationID);
+        }
 
         if (m_zoomAnimFrameCounter < 5) {
             m_zoomAnimFrameCounter++;
@@ -2133,6 +2138,19 @@ bool CMonitor::isVrrKeepaliveDue() {
     });
 }
 
+bool CMonitor::commitOutput(bool zeroCopy) {
+    if (!m_output)
+        return false;
+
+    const bool     BUFFER_COMMITTED = m_output->state->state().committed & Aquamarine::COutputState::AQ_OUTPUT_STATE_BUFFER;
+    const uint64_t PRESENTATION_ID  = PROTO::presentation->beginOutputCommit(m_self.lock(), BUFFER_COMMITTED, zeroCopy);
+
+    m_output->state->setPresentationID(PRESENTATION_ID);
+    const bool SUCCESS = m_output->commit();
+    PROTO::presentation->finishOutputCommit(m_self.lock(), PRESENTATION_ID, SUCCESS);
+    return SUCCESS;
+}
+
 bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer) {
     static const auto PSAMEFIFO = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer_fifo");
 
@@ -2141,12 +2159,13 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
     const bool CURSOR_COMMIT_DUE       = m_scanoutNeedsCursorUpdate && !shouldSuppressCursorCommit();
     const bool VRR_KEEPALIVE_DUE       = isVrrKeepaliveDue();
     const bool OUTPUT_STATE_COMMIT_DUE = m_output->state->state().committed != 0;
+    const bool PRESENTATION_COMMIT_DUE = PROTO::presentation->hasStagedData(m_self.lock());
 
-    if (CURSOR_COMMIT_DUE || VRR_KEEPALIVE_DUE || OUTPUT_STATE_COMMIT_DUE) {
+    if (CURSOR_COMMIT_DUE || VRR_KEEPALIVE_DUE || OUTPUT_STATE_COMMIT_DUE || PRESENTATION_COMMIT_DUE) {
         m_output->state->setBuffer(buffer);
-        if (!m_state.test() || !m_output->commit()) {
-            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursor: {}, keepalive: {}, output state: {}", CURSOR_COMMIT_DUE, VRR_KEEPALIVE_DUE,
-                             OUTPUT_STATE_COMMIT_DUE);
+        if (!m_state.test() || !commitOutput(true)) {
+            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursor: {}, keepalive: {}, output state: {}, presentation: {}", CURSOR_COMMIT_DUE,
+                             VRR_KEEPALIVE_DUE, OUTPUT_STATE_COMMIT_DUE, PRESENTATION_COMMIT_DUE);
             m_lastScanout.reset();
             m_activeScanoutSurface.reset();
             return false;
@@ -2245,7 +2264,7 @@ bool CMonitor::attemptDirectScanout() {
 
     // no need to do explicit sync here as surface current can only ever be ready to read
 
-    bool ok = m_output->commit();
+    bool ok = commitOutput(true);
 
     if (!ok) {
         Log::logger->log(Log::TRACE, "attemptDirectScanout: failed to scanout surface");
@@ -2720,9 +2739,7 @@ bool CMonitorState::commit() {
     Event::bus()->m_events.monitor.preCommit.emit(m_owner->m_self.lock());
 
     ensureBufferPresent();
-
-    bool ret = m_owner->m_output->commit();
-    return ret;
+    return m_owner->commitOutput();
 }
 
 bool CMonitorState::test() {
