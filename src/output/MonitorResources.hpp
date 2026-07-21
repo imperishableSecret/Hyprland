@@ -4,6 +4,7 @@
 #include "../helpers/Format.hpp"
 #include "../helpers/time/Timer.hpp"
 #include "../render/Framebuffer.hpp"
+#include "../render/PreblurCache.hpp"
 #include <hyprutils/math/Vector2D.hpp>
 #include <vector>
 
@@ -13,6 +14,10 @@ namespace Monitor {
         CMonitorResources(WP<CMonitor> monitor, DRMFormat format, Vector2D size, NColorManagement::PImageDescription imageDescription);
 
         SP<Render::IFramebuffer> getUnusedWorkBuffer();
+        Render::SPreblurCacheKey preblurCacheKey(NColorManagement::PImageDescription sourceDescription, NColorManagement::PImageDescription outputDescription) const;
+        void                     invalidatePreblurCache();
+        void                     markPreblurCacheValid(const Render::SPreblurCacheKey& key);
+        bool                     preblurCacheValid(const Render::SPreblurCacheKey& key) const;
         void                     forEachUnusedFB(std::function<void(SP<Render::IFramebuffer>)> callback, bool includeNamed = false);
         bool                     hasMirrorFB() const;
         bool                     shouldKeepMirrorFB() const;
@@ -50,6 +55,7 @@ namespace Monitor {
         NColorManagement::PImageDescription m_imageDescription;
         bool                                m_mirrorFBValid            = false;
         bool                                m_mirrorFBNeedsFullRefresh = true;
+        Render::CPreblurCacheState          m_preblurCacheState;
 
         std::vector<SResource>              m_workBuffers;
 

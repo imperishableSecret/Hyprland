@@ -1052,16 +1052,20 @@ void CHyprOpenGLImpl::renderRectWithBlurInternal(const CBox& box, const CHyprCol
     CRegion damage{g_pHyprRenderer->m_renderData.damage};
     damage.intersect(box);
 
-    auto blurredBG = data.xray ? g_pHyprRenderer->m_renderData.pMonitor->resources()->m_blurFB->getTexture() : g_pHyprRenderer->blurMainFramebuffer(data.blurA, &damage);
+    auto blurredBG = data.xray && g_pHyprRenderer->preBlurCacheValid(g_pHyprRenderer->m_renderData.pMonitor) ?
+        g_pHyprRenderer->m_renderData.pMonitor->resources()->m_blurFB->getTexture() :
+        g_pHyprRenderer->blurMainFramebuffer(data.blurA, &damage);
 
-    CBox MONITORBOX = {0, 0, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.x, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.y};
-    g_pHyprRenderer->pushMonitorTransformEnabled(true);
-    const auto SAVEDRENDERMODIF               = g_pHyprRenderer->m_renderData.renderModif;
-    g_pHyprRenderer->m_renderData.renderModif = {}; // fix shit
-    renderTexture(blurredBG, MONITORBOX,
-                  STextureRenderData{.damage = &damage, .a = data.blurA, .round = data.round, .roundingPower = 2.F, .allowCustomUV = false, .allowDim = false, .noAA = false});
-    g_pHyprRenderer->popMonitorTransformEnabled();
-    g_pHyprRenderer->m_renderData.renderModif = SAVEDRENDERMODIF;
+    if (blurredBG) {
+        CBox MONITORBOX = {0, 0, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.x, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.y};
+        g_pHyprRenderer->pushMonitorTransformEnabled(true);
+        const auto SAVEDRENDERMODIF               = g_pHyprRenderer->m_renderData.renderModif;
+        g_pHyprRenderer->m_renderData.renderModif = {}; // fix shit
+        renderTexture(blurredBG, MONITORBOX,
+                      STextureRenderData{.damage = &damage, .a = data.blurA, .round = data.round, .roundingPower = 2.F, .allowCustomUV = false, .allowDim = false, .noAA = false});
+        g_pHyprRenderer->popMonitorTransformEnabled();
+        g_pHyprRenderer->m_renderData.renderModif = SAVEDRENDERMODIF;
+    }
 
     renderRectWithDamageInternal(box, col, data);
 }
@@ -1679,13 +1683,12 @@ void CHyprOpenGLImpl::renderTextureMatte(SP<ITexture> tex, const CBox& box, SP<I
     tex->unbind();
 }
 
-static SCMSettings blurIntermediateCMSettings(bool toIntermediate) {
-    const auto WORKBUFFER   = g_pHyprRenderer->workBufferImageDescription();
+static SCMSettings blurIntermediateCMSettings(NColorManagement::PImageDescription source, NColorManagement::PImageDescription output, bool toIntermediate) {
     const auto INTERMEDIATE = getDefaultImageDescription();
 
-    auto       settings = toIntermediate ? g_pHyprRenderer->getCMSettings(WORKBUFFER, INTERMEDIATE) : g_pHyprRenderer->getCMSettings(INTERMEDIATE, WORKBUFFER);
+    auto       settings = toIntermediate ? g_pHyprRenderer->getCMSettings(source, INTERMEDIATE) : g_pHyprRenderer->getCMSettings(INTERMEDIATE, output);
     auto&      range    = toIntermediate ? settings.dstTFRange : settings.srcTFRange;
-    range.max           = std::max(range.max, sc<float>(WORKBUFFER->value().luminances.max));
+    range.max           = std::max(range.max, sc<float>((toIntermediate ? source : output)->value().luminances.max));
     return settings;
 }
 
@@ -1695,9 +1698,20 @@ static SCMSettings blurIntermediateCMSettings(bool toIntermediate) {
 // Dual (or more) kawase blur
 SP<IFramebuffer> CHyprOpenGLImpl::blurFramebufferWithDamage(float a, CRegion* originalDamage, CGLFramebuffer& source) {
     TRACY_GPU_ZONE("RenderBlurFramebufferWithDamage");
-    auto&      m_renderData = g_pHyprRenderer->m_renderData;
+    auto&      m_renderData        = g_pHyprRenderer->m_renderData;
+    const auto SOURCE_DESCRIPTION  = source.imageDescription();
+    const auto DEFAULT_DESCRIPTION = getDefaultImageDescription();
+    const auto OUTPUT_DESCRIPTION  = m_renderData.pMonitor->workBufferImageDescription();
+    if (!SOURCE_DESCRIPTION || !DEFAULT_DESCRIPTION || !OUTPUT_DESCRIPTION)
+        return nullptr;
 
-    const auto BLENDBEFORE = m_blend;
+    const auto PMIRRORFB     = m_renderData.pMonitor->resources()->getUnusedWorkBuffer();
+    const auto PMIRRORSWAPFB = m_renderData.pMonitor->resources()->getUnusedWorkBuffer();
+    if (!PMIRRORFB || !PMIRRORSWAPFB)
+        return nullptr;
+
+    const bool OUTPUT_IS_PQ = OUTPUT_DESCRIPTION->value().transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ;
+    const auto BLENDBEFORE  = m_blend;
     blend(false);
     setCapStatus(GL_STENCIL_TEST, false);
 
@@ -1722,10 +1736,7 @@ SP<IFramebuffer> CHyprOpenGLImpl::blurFramebufferWithDamage(float a, CRegion* or
     damage.expand(std::clamp(*PBLURSIZE, sc<int64_t>(1), sc<int64_t>(40)) * pow(2, BLUR_PASSES));
 
     // helper
-    const auto PMIRRORFB     = g_pHyprRenderer->m_renderData.pMonitor->resources()->getUnusedWorkBuffer();
-    const auto PMIRRORSWAPFB = g_pHyprRenderer->m_renderData.pMonitor->resources()->getUnusedWorkBuffer();
-
-    auto       currentRenderToFB = PMIRRORFB;
+    auto currentRenderToFB = PMIRRORFB;
 
     // Begin with base color adjustments - global brightness and contrast
     // TODO: make this a part of the first pass maybe to save on a drawcall?
@@ -1747,22 +1758,14 @@ SP<IFramebuffer> CHyprOpenGLImpl::blurFramebufferWithDamage(float a, CRegion* or
         WP<CShader> shader;
 
         // From FB to sRGB
-        const bool skipCM = !m_cmSupported || !g_pHyprRenderer->workBufferImageDescription()->needsCM(getDefaultImageDescription());
+        const bool skipCM = !m_cmSupported || !SOURCE_DESCRIPTION->needsCM(DEFAULT_DESCRIPTION);
         if (!skipCM) {
             shader = useShader(getShaderVariant(SH_FRAG_BLURPREPARE, SH_FEAT_CM));
 
-            passCMUniforms(shader, g_pHyprRenderer->workBufferImageDescription(), getDefaultImageDescription(), false, -1.F, -1,
-                           blurIntermediateCMSettings(/* toIntermediate */ true));
-            shader->setUniformFloat(SHADER_SDR_SATURATION,
-                                    m_renderData.pMonitor->m_sdrSaturation > 0 &&
-                                            g_pHyprRenderer->workBufferImageDescription()->value().transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ?
-                                        m_renderData.pMonitor->m_sdrSaturation :
-                                        1.0f);
-            shader->setUniformFloat(SHADER_SDR_BRIGHTNESS,
-                                    m_renderData.pMonitor->m_sdrBrightness > 0 &&
-                                            g_pHyprRenderer->workBufferImageDescription()->value().transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ?
-                                        m_renderData.pMonitor->m_sdrBrightness :
-                                        1.0f);
+            passCMUniforms(shader, SOURCE_DESCRIPTION, DEFAULT_DESCRIPTION, false, -1.F, -1,
+                           blurIntermediateCMSettings(SOURCE_DESCRIPTION, OUTPUT_DESCRIPTION, /* toIntermediate */ true));
+            shader->setUniformFloat(SHADER_SDR_SATURATION, m_renderData.pMonitor->m_sdrSaturation > 0 && OUTPUT_IS_PQ ? m_renderData.pMonitor->m_sdrSaturation : 1.0f);
+            shader->setUniformFloat(SHADER_SDR_BRIGHTNESS, m_renderData.pMonitor->m_sdrBrightness > 0 && OUTPUT_IS_PQ ? m_renderData.pMonitor->m_sdrBrightness : 1.0f);
         } else
             shader = useShader(getShaderVariant(SH_FRAG_BLURPREPARE));
 
@@ -1870,22 +1873,14 @@ SP<IFramebuffer> CHyprOpenGLImpl::blurFramebufferWithDamage(float a, CRegion* or
         currentTex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
         // From FB to sRGB
-        const bool skipCM = !m_cmSupported || !g_pHyprRenderer->workBufferImageDescription()->needsCM(getDefaultImageDescription());
+        const bool skipCM = !m_cmSupported || !OUTPUT_DESCRIPTION->needsCM(DEFAULT_DESCRIPTION);
         if (!skipCM) {
             shader = useShader(getShaderVariant(SH_FRAG_BLURFINISH, SH_FEAT_CM));
 
-            passCMUniforms(shader, getDefaultImageDescription(), g_pHyprRenderer->workBufferImageDescription(), false, -1.F, -1,
-                           blurIntermediateCMSettings(/* toIntermediate */ false));
-            shader->setUniformFloat(SHADER_SDR_SATURATION,
-                                    m_renderData.pMonitor->m_sdrSaturation > 0 &&
-                                            g_pHyprRenderer->workBufferImageDescription()->value().transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ?
-                                        m_renderData.pMonitor->m_sdrSaturation :
-                                        1.0f);
-            shader->setUniformFloat(SHADER_SDR_BRIGHTNESS,
-                                    m_renderData.pMonitor->m_sdrBrightness > 0 &&
-                                            g_pHyprRenderer->workBufferImageDescription()->value().transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ?
-                                        m_renderData.pMonitor->m_sdrBrightness :
-                                        1.0f);
+            passCMUniforms(shader, DEFAULT_DESCRIPTION, OUTPUT_DESCRIPTION, false, -1.F, -1,
+                           blurIntermediateCMSettings(SOURCE_DESCRIPTION, OUTPUT_DESCRIPTION, /* toIntermediate */ false));
+            shader->setUniformFloat(SHADER_SDR_SATURATION, m_renderData.pMonitor->m_sdrSaturation > 0 && OUTPUT_IS_PQ ? m_renderData.pMonitor->m_sdrSaturation : 1.0f);
+            shader->setUniformFloat(SHADER_SDR_BRIGHTNESS, m_renderData.pMonitor->m_sdrBrightness > 0 && OUTPUT_IS_PQ ? m_renderData.pMonitor->m_sdrBrightness : 1.0f);
         } else
             shader = useShader(getShaderVariant(SH_FRAG_BLURFINISH));
 
@@ -1914,6 +1909,7 @@ SP<IFramebuffer> CHyprOpenGLImpl::blurFramebufferWithDamage(float a, CRegion* or
 
     // finish
     PMIRRORFB->getTexture()->unbind();
+    currentRenderToFB->setImageDescription(OUTPUT_DESCRIPTION);
 
     blend(BLENDBEFORE);
 
@@ -1927,6 +1923,8 @@ void CHyprOpenGLImpl::preRender(PHLMONITOR pMonitor) {
 
     if (!*PBLURNEWOPTIMIZE || !pMonitor->m_blurFBDirty || !*PBLUR)
         return;
+
+    pMonitor->resources()->invalidatePreblurCache();
 
     // ignore if solitary present, nothing to blur
     if (!pMonitor->m_solitaryClient.expired())
@@ -1982,20 +1980,11 @@ void CHyprOpenGLImpl::preRender(PHLMONITOR pMonitor) {
         }
     }
 
-    for (auto const& m : State::monitorState()->monitors()) {
-        for (auto const& lsl : m->m_layerSurfaceLayers) {
-            for (auto const& ls : lsl) {
-                if (!ls->m_layerSurface || ls->m_ruleApplicator->xray().valueOrDefault() != 1)
-                    continue;
-
-                // if (ls->layerSurface->surface->opaque && ls->alpha->value() >= 1.f)
-                //     continue;
-
-                hasWindows = true;
-                break;
-            }
-        }
-    }
+    if (!hasWindows)
+        hasWindows = std::ranges::any_of(pMonitor->m_layerSurfaceLayers, [pMonitor](const auto& layer) {
+            return std::ranges::any_of(
+                layer, [pMonitor](const auto& ls) { return ls->m_monitor == pMonitor && ls->m_layerSurface && ls->m_ruleApplicator->xray().valueOrDefault() == 1; });
+        });
 
     if (!hasWindows)
         return;

@@ -28,8 +28,10 @@ void CMonitorResources::initFB(SP<Render::IFramebuffer> fb) {
 void CMonitorResources::setImageDescription(NColorManagement::PImageDescription imageDescription) {
     if (m_imageDescription == imageDescription)
         return;
+
     m_imageDescription = imageDescription;
-    m_blurFB->setImageDescription(imageDescription);
+    invalidatePreblurCache();
+    m_monitor->m_blurFBDirty = true;
     for (const auto& res : m_workBuffers)
         res.buffer->setImageDescription(imageDescription);
     if (m_monitorMirrorFB)
@@ -37,6 +39,25 @@ void CMonitorResources::setImageDescription(NColorManagement::PImageDescription 
     if (m_mirrorTex)
         m_mirrorTex->m_imageDescription = getMirrorTexImageDescription();
     invalidateMirrorFB();
+}
+
+Render::SPreblurCacheKey CMonitorResources::preblurCacheKey(NColorManagement::PImageDescription sourceDescription, NColorManagement::PImageDescription outputDescription) const {
+    return {
+        .sourceDescriptionId = sourceDescription ? sourceDescription->id() : 0,
+        .outputDescriptionId = outputDescription ? outputDescription->id() : 0,
+    };
+}
+
+void CMonitorResources::invalidatePreblurCache() {
+    m_preblurCacheState.invalidate();
+}
+
+void CMonitorResources::markPreblurCacheValid(const Render::SPreblurCacheKey& key) {
+    m_preblurCacheState.markValid(key);
+}
+
+bool CMonitorResources::preblurCacheValid(const Render::SPreblurCacheKey& key) const {
+    return m_preblurCacheState.validFor(key);
 }
 
 SP<Render::IFramebuffer> CMonitorResources::getUnusedWorkBuffer() {

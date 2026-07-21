@@ -309,8 +309,9 @@ void CHyprGLRenderer::drawGlow(const CBox& box, int round, float roundingPower, 
 }
 
 SP<ITexture> CHyprGLRenderer::blurFramebuffer(SP<IFramebuffer> source, float a, CRegion* originalDamage) {
-    auto src = GLFB(source);
-    return g_pHyprOpenGL->blurFramebufferWithDamage(a, originalDamage, *src)->getTexture();
+    const auto SRC     = GLFB(source);
+    const auto BLURRED = g_pHyprOpenGL->blurFramebufferWithDamage(a, originalDamage, *SRC);
+    return BLURRED ? BLURRED->getTexture() : nullptr;
 }
 
 void CHyprGLRenderer::setViewport(int x, int y, int width, int height) {
