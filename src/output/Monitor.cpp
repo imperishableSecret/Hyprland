@@ -195,6 +195,7 @@ void CMonitor::onConnect(bool noRule) {
         }
 
         m_frameScheduler->onPresented();
+        m_lastPresentationTimer.reset();
 
         m_events.presented.emit(Time::fromTimespec(&ts));
     });
@@ -1159,24 +1160,32 @@ void CMonitor::addDamage(const CBox& box) {
         scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_DAMAGE);
 }
 
-bool CMonitor::shouldSkipScheduleFrameOnMouseEvent() {
+bool CMonitor::shouldSuppressCursorCommit() {
     static auto PNOBREAK = CConfigValue<Config::INTEGER>("cursor:no_break_fs_vrr");
-    static auto PMINRR   = CConfigValue<Config::INTEGER>("cursor:min_refresh_rate");
 
-    // skip scheduling extra frames for fullsreen apps with vrr
+    if (!m_output)
+        return false;
+
     const auto FULLSCREEN_WINDOW  = Fullscreen::controller()->getFullscreenWindow(m_self.lock());
     const bool shouldRenderCursor = g_pHyprRenderer->shouldRenderCursor();
     const bool noBreak            = FULLSCREEN_WINDOW && (*PNOBREAK == 1 || (*PNOBREAK == 2 && FULLSCREEN_WINDOW->getContentType() == CONTENT_TYPE_GAME));
-    const bool shouldSkip         = (!shouldRenderCursor || noBreak) && m_output->state->state().adaptiveSync;
 
-    // keep requested minimum refresh rate
-    if (shouldSkip && *PMINRR && m_lastPresentationTimer.getMillis() > 1000.0f / *PMINRR) {
-        // damage whole screen because some previous cursor box damages were skipped
-        m_damage.damageEntire();
+    return (!shouldRenderCursor || noBreak) && m_output->state->state().adaptiveSync;
+}
+
+bool CMonitor::shouldSkipScheduleFrameOnMouseEvent() {
+    if (!shouldSuppressCursorCommit())
         return false;
-    }
 
-    return shouldSkip;
+    if (isVrrKeepaliveDue())
+        scheduleVrrKeepalive();
+
+    return true;
+}
+
+void CMonitor::scheduleVrrKeepalive() {
+    m_damage.damageEntire();
+    scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_CURSOR_MOVE);
 }
 
 bool CMonitor::isMirror() {
@@ -2108,9 +2117,51 @@ uint16_t CMonitor::isDSBlocked(bool full) {
     return reasons;
 }
 
-bool CMonitor::attemptDirectScanout() {
-    static const auto PSAME     = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer");
+bool CMonitor::isVrrKeepaliveDue() {
+    static auto PMINRR = CConfigValue<Config::INTEGER>("cursor:min_refresh_rate");
+
+    if (!m_output)
+        return false;
+
+    return Monitor::scanoutKeepaliveDue({
+        .adaptiveSync     = m_output->state->state().adaptiveSync,
+        .minimumRefreshHz = sc<float>(*PMINRR),
+        .elapsedMillis    = sc<float>(m_lastPresentationTimer.getMillis()),
+        .pendingPageFlip  = m_output->pendingPageFlip(),
+        .pendingIdleFrame = m_output->pendingIdleFrame(),
+    });
+}
+
+bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer) {
     static const auto PSAMEFIFO = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer_fifo");
+
+    surface->presentFeedback(Time::steadyNow(), m_self.lock());
+
+    const bool CURSOR_COMMIT_DUE       = m_scanoutNeedsCursorUpdate && !shouldSuppressCursorCommit();
+    const bool VRR_KEEPALIVE_DUE       = isVrrKeepaliveDue();
+    const bool OUTPUT_STATE_COMMIT_DUE = m_output->state->state().committed != 0;
+
+    if (CURSOR_COMMIT_DUE || VRR_KEEPALIVE_DUE || OUTPUT_STATE_COMMIT_DUE) {
+        m_output->state->setBuffer(buffer);
+        if (!m_state.test() || !m_output->commit()) {
+            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursor: {}, keepalive: {}, output state: {}", CURSOR_COMMIT_DUE, VRR_KEEPALIVE_DUE,
+                             OUTPUT_STATE_COMMIT_DUE);
+            m_lastScanout.reset();
+            return false;
+        }
+
+        m_scanoutNeedsCursorUpdate = false;
+        return true;
+    }
+
+    if (surface->m_fifo && !m_tearingState.activelyTearing && *PSAMEFIFO)
+        surface->m_stateQueue.unlockFirst(LOCK_REASON_FIFO);
+
+    return true;
+}
+
+bool CMonitor::attemptDirectScanout() {
+    static const auto PSAME = CConfigValue<Config::INTEGER>("debug:ds_handle_same_buffer");
 
     const auto        blockedReason = isDSBlocked();
     if (blockedReason)
@@ -2120,31 +2171,8 @@ bool CMonitor::attemptDirectScanout() {
     const auto PSURFACE   = PCANDIDATE->getSolitaryResource();
     auto       PBUFFER    = PSURFACE->m_current.buffer.m_buffer;
 
-    // #TODO this entire bit needs figuring out, vrr goes down the drain without it
-    if (PBUFFER == m_output->state->state().buffer && *PSAME) {
-        PSURFACE->presentFeedback(Time::steadyNow(), m_self.lock());
-
-        if (m_scanoutNeedsCursorUpdate) {
-            if (!m_state.test()) {
-                Log::logger->log(Log::TRACE, "attemptDirectScanout: failed basic test on cursor update");
-                return false;
-            }
-
-            if (!m_output->commit()) {
-                Log::logger->log(Log::TRACE, "attemptDirectScanout: failed to commit cursor update");
-                m_lastScanout.reset();
-                return false;
-            }
-
-            m_scanoutNeedsCursorUpdate = false;
-        }
-
-        //#TODO this entire bit is bootleg deluxe, above bit is to not make vrr go down the drain, returning early here means fifo gets forever locked.
-        if (PSURFACE->m_fifo && !m_tearingState.activelyTearing && *PSAMEFIFO)
-            PSURFACE->m_stateQueue.unlockFirst(LOCK_REASON_FIFO);
-
-        return true;
-    }
+    if (PBUFFER == m_output->state->state().buffer && *PSAME)
+        return attemptDirectScanoutSameBuffer(PSURFACE, PBUFFER);
 
     const auto params = PSURFACE->m_current.buffer->dmabuf();
 

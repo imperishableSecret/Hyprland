@@ -26,6 +26,7 @@
 #include "../helpers/cm/ColorManagement.hpp"
 #include "../helpers/signal/Signal.hpp"
 #include "DamageRing.hpp"
+#include "ScanoutKeepalive.hpp"
 #include <aquamarine/output/Output.hpp>
 #include <aquamarine/allocator/Swapchain.hpp>
 #include <hyprutils/os/FileDescriptor.hpp>
@@ -398,6 +399,10 @@ namespace Monitor {
         void                    scheduleModeRetry();
         void                    clearModeRetry();
         void                    updateVCGTRamps();
+        void                    scheduleVrrKeepalive();
+        bool                    shouldSuppressCursorCommit();
+        bool                    isVrrKeepaliveDue();
+        bool                    attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer);
         bool                    trySetFormat(std::span<const uint32_t> formats);
 
         bool                    m_doneScheduled  = false;

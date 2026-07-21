@@ -100,8 +100,6 @@ void CMonitorFrameScheduler::onFrame() {
     }
 
     if (!newSchedulingEnabled()) {
-        PMONITOR->m_lastPresentationTimer.reset();
-
         g_pHyprRenderer->renderMonitor(PMONITOR);
         return;
     }
