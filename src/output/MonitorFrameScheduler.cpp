@@ -1,4 +1,5 @@
 #include "MonitorFrameScheduler.hpp"
+#include "FrameCompletionDecision.hpp"
 #include "../config/ConfigValue.hpp"
 #include "../Compositor.hpp"
 #include "../render/Renderer.hpp"
@@ -14,13 +15,18 @@ CMonitorFrameScheduler::CMonitorFrameScheduler(PHLMONITOR m) : m_monitor(m) {
 bool CMonitorFrameScheduler::newSchedulingEnabled() {
     static auto PENABLENEW = CConfigValue<Config::INTEGER>("render:new_render_scheduling");
 
-    return *PENABLENEW && g_pHyprRenderer->explicitSyncSupported() && m_monitor && !m_monitor->m_directScanoutIsActive;
+    return *PENABLENEW && !m_forceConventional && g_pHyprRenderer->explicitSyncSupported() && m_monitor && !m_monitor->m_directScanoutIsActive;
 }
 
 void CMonitorFrameScheduler::onSyncFired() {
     const auto PMONITOR = m_monitor.lock();
-    if (!PMONITOR || !newSchedulingEnabled())
+    if (!PMONITOR)
         return;
+    if (!newSchedulingEnabled()) {
+        m_renderAtFrame = true;
+        m_pendingThird  = false;
+        return;
+    }
 
     // Sync fired: reset submitted state, set as rendered. Check the last render time. If we are running
     // late, we will instantly render here.
@@ -38,44 +44,57 @@ void CMonitorFrameScheduler::onSyncFired() {
     m_pendingThird  = true;
     m_renderAtFrame = false; // block frame rendering, we already scheduled
 
-    m_lastRenderBegun = hrc::now();
+    m_lastRenderBegun        = hrc::now();
+    m_pendingThirdGeneration = ++m_renderGeneration;
 
     // get a ref to ourselves. renderMonitor can destroy this scheduler if it decides to perform a monitor reload
     // FIXME: this is horrible. "renderMonitor" should not be able to do that.
     auto self = m_self;
 
-    g_pHyprRenderer->renderMonitor(PMONITOR, false);
+    auto renderCompletionFence = g_pHyprRenderer->renderMonitor(PMONITOR, false);
 
     if (!self)
         return;
 
-    onFinishRender();
+    onFinishRender(std::move(renderCompletionFence));
 }
 
 void CMonitorFrameScheduler::onPresented() {
     const auto PMONITOR = m_monitor.lock();
-    if (!PMONITOR || !newSchedulingEnabled())
+    if (!PMONITOR)
         return;
+    if (!newSchedulingEnabled()) {
+        m_renderAtFrame = true;
+        m_pendingThird  = false;
+        return;
+    }
 
     if (!m_pendingThird)
         return;
 
     Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> onPresented, missed, committing pending.", PMONITOR->m_name);
 
-    m_pendingThird = false;
+    const auto COMMIT_GENERATION = m_pendingThirdGeneration;
 
     Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> onPresented, missed, committing pending at the earliest convenience.", PMONITOR->m_name);
 
-    g_pEventLoopManager->doLater([m = PHLMONITORREF{PMONITOR}] {
+    m_pendingThird = false;
+
+    g_pEventLoopManager->doLater([m = PHLMONITORREF{PMONITOR}, scheduler = m_self, commitGeneration = COMMIT_GENERATION] {
         if (!m || !m->m_output)
             return;
 
-        auto ml = m.lock();
+        auto       ml = m.lock();
+
+        const auto SCHEDULER = scheduler.lock();
+        if (!SCHEDULER || !pendingCommitIsCurrent(commitGeneration, SCHEDULER->m_renderGeneration, SCHEDULER->newSchedulingEnabled())) {
+            Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> skipping stale pending commit.", ml->m_name);
+            return;
+        }
 
         g_pHyprRenderer->commitPendingAndDoExplicitSync(ml); // commit the pending frame. If it didn't fire yet (is not rendered) it doesn't matter. Syncs will wait.
 
-        // schedule a frame: we might have some missed damage, which got cleared due to the above commit.
-        // TODO: this is not always necessary, but doesn't hurt in general. We likely won't hit this if nothing's happening anyways.
+        // Schedule a frame only if damage arrived after the current frame consumed the damage ring.
         if (ml->m_damage.hasChanged())
             ml->scheduleFrame();
     });
@@ -100,6 +119,8 @@ void CMonitorFrameScheduler::onFrame() {
     }
 
     if (!newSchedulingEnabled()) {
+        ++m_renderGeneration;
+        m_pendingThird = false;
         g_pHyprRenderer->renderMonitor(PMONITOR);
         return;
     }
@@ -112,29 +133,44 @@ void CMonitorFrameScheduler::onFrame() {
     Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> frame event, render = true, rendering normally.", PMONITOR->m_name);
 
     m_lastRenderBegun = hrc::now();
+    ++m_renderGeneration;
 
     // get a ref to ourselves. renderMonitor can destroy this scheduler if it decides to perform a monitor reload
     // FIXME: this is horrible. "renderMonitor" should not be able to do that.
     auto self = m_self;
 
-    g_pHyprRenderer->renderMonitor(PMONITOR);
+    auto renderCompletionFence = g_pHyprRenderer->renderMonitor(PMONITOR);
 
     if (!self)
         return;
 
-    onFinishRender();
+    onFinishRender(std::move(renderCompletionFence));
 }
 
-void CMonitorFrameScheduler::onFinishRender() {
-    m_sync = g_pHyprRenderer->createSyncFDManager(); // this destroys the old sync
-    if (!m_sync || !m_sync->isValid()) {
-        Log::logger->log(Log::ERR, "CMonitorFrameScheduler: explicit sync failed, falling back to frame events");
-        m_sync.reset();
+void CMonitorFrameScheduler::onFinishRender(Hyprutils::OS::CFileDescriptor fence) {
+    const auto ACTION = frameCompletionAction(newSchedulingEnabled(), fence.isValid(), m_pendingThird);
+
+    if (ACTION == FRAME_COMPLETION_IGNORE) {
         m_renderAtFrame = true;
+        m_pendingThird  = false;
         return;
     }
 
-    g_pEventLoopManager->doOnReadable(m_sync->fd().duplicate(), [this, self = m_self] {
+    if (ACTION == FRAME_COMPLETION_FALLBACK || ACTION == FRAME_COMPLETION_FALLBACK_COMMIT_PENDING) {
+        Log::logger->log(Log::WARN, "CMonitorFrameScheduler: render completion fence unavailable, falling back to conventional scheduling");
+        m_forceConventional = true;
+        m_renderAtFrame     = true;
+
+        if (ACTION == FRAME_COMPLETION_FALLBACK_COMMIT_PENDING) {
+            m_pendingThird = false;
+            if (const auto PMONITOR = m_monitor.lock())
+                g_pHyprRenderer->commitPendingAndDoExplicitSync(PMONITOR);
+        }
+
+        return;
+    }
+
+    g_pEventLoopManager->doOnReadable(std::move(fence), [this, self = m_self] {
         if (!self) // might've gotten destroyed
             return;
         onSyncFired();

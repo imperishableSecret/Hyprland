@@ -85,7 +85,7 @@ bool CHyprGLRenderer::beginRenderInternal(PHLMONITOR pMonitor, CRegion& damage, 
     return true;
 }
 
-void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallback) {
+CFileDescriptor CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallback) {
     const auto  PMONITOR           = g_pHyprRenderer->m_renderData.pMonitor;
     static auto PNVIDIAANTIFLICKER = CConfigValue<Config::INTEGER>("opengl:nvidia_anti_flicker");
 
@@ -107,7 +107,7 @@ void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallba
     }
 
     if (m_renderMode == RENDER_MODE_FULL_FAKE)
-        return;
+        return {};
 
     if (m_renderMode == RENDER_MODE_NORMAL)
         PMONITOR->m_output->state->setBuffer(m_currentBuffer);
@@ -128,11 +128,15 @@ void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallba
         if (renderingDoneCallback)
             renderingDoneCallback();
 
-        return;
+        return {};
     }
 
-    auto eglSync = createSyncFDManager();
+    CFileDescriptor renderCompletionFence;
+    auto            eglSync = createSyncFDManager();
     if LIKELY (eglSync && eglSync->isValid()) {
+        if (m_renderMode == RENDER_MODE_NORMAL)
+            renderCompletionFence = eglSync->fd().duplicate();
+
         for (auto& buf : PMONITOR->m_usedAsyncBuffers) {
             if (buf.first.expired()) // surface is gone.
                 continue;
@@ -170,6 +174,8 @@ void CHyprGLRenderer::endRender(const std::function<void()>& renderingDoneCallba
         if (renderingDoneCallback)
             renderingDoneCallback();
     }
+
+    return renderCompletionFence;
 }
 
 void CHyprGLRenderer::renderOffToMain(SP<IFramebuffer> off) {
