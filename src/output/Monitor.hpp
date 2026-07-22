@@ -288,6 +288,8 @@ namespace Monitor {
         uint16_t     isDSBlocked(bool full = false);
         bool         attemptDirectScanout();
         bool         commitOutput(bool zeroCopy = false);
+        void         beginFifoFrame();
+        void         stageFifoLatch(WP<CWLSurfaceResource> surface, uint64_t epoch);
         void         handleDSleave();
         bool         canAttemptDirectScanoutFast() const;
         bool         isMultiGPU();
@@ -430,10 +432,20 @@ namespace Monitor {
             CHyprSignalListener commit;
         } m_listeners;
 
-        int   m_supportsWideColor = 0;
-        int   m_supportsHDR       = 0;
-        float m_minLuminance      = -1.0f;
-        int   m_maxLuminance      = -1;
-        int   m_maxAvgLuminance   = -1;
+        struct SFifoLatch {
+            WP<CWLSurfaceResource> surface;
+            uint64_t               epoch = 0;
+        };
+
+        std::vector<SFifoLatch> m_stagedFifoLatches;
+
+        bool                    hasStagedFifoLatches() const;
+        void                    finishFifoLatches();
+
+        int                     m_supportsWideColor = 0;
+        int                     m_supportsHDR       = 0;
+        float                   m_minLuminance      = -1.0f;
+        int                     m_maxLuminance      = -1;
+        int                     m_maxAvgLuminance   = -1;
     };
 }

@@ -74,39 +74,40 @@ CDRMSyncobjSurfaceResource::CDRMSyncobjSurfaceResource(UP<CWpLinuxDrmSyncobjSurf
         m_pendingRelease = {timeline->m_timeline, (sc<uint64_t>(hi) << 32) | sc<uint64_t>(lo)};
     });
 
-    m_listeners.surfaceStateCommit = m_surface->m_events.stateCommit.listen([this](auto state) {
-        if (!state->updated.bits.buffer || !state->buffer) {
+    m_listeners.surfaceContentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        auto& state = update->state();
+        if (!state.updated.bits.buffer || !state.buffer) {
             if (m_pendingAcquire.timeline() || m_pendingRelease.timeline()) {
                 m_resource->error(WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_BUFFER, "Missing buffer");
-                state->rejected = true;
+                state.rejected = true;
             }
             return;
         }
 
         if (!m_pendingAcquire.timeline()) {
             m_resource->error(WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_ACQUIRE_POINT, "Missing acquire timeline");
-            state->rejected = true;
+            state.rejected = true;
             return;
         }
 
         if (!m_pendingRelease.timeline()) {
             m_resource->error(WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_RELEASE_POINT, "Missing release timeline");
-            state->rejected = true;
+            state.rejected = true;
             return;
         }
 
         if (m_pendingAcquire.timeline() == m_pendingRelease.timeline() && m_pendingAcquire.point() >= m_pendingRelease.point()) {
             m_resource->error(WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_CONFLICTING_POINTS, "Acquire and release points are on the same timeline, and acquire >= release");
-            state->rejected = true;
+            state.rejected = true;
             return;
         }
 
-        state->updated.bits.acquire = true;
-        state->acquire              = m_pendingAcquire;
-        m_surface->m_stateQueue.lock(state, LOCK_REASON_FENCE);
+        state.updated.bits.acquire = true;
+        state.acquire              = m_pendingAcquire;
+        update->addConstraint(eContentUpdateConstraint::FENCE);
         m_pendingAcquire = {};
 
-        state->buffer->addReleasePoint(m_pendingRelease);
+        state.buffer->addReleasePoint(m_pendingRelease);
         m_pendingRelease = {};
     });
 }

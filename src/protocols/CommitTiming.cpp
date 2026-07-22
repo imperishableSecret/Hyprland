@@ -41,30 +41,31 @@ CCommitTimerResource::CCommitTimerResource(UP<CWpCommitTimerV1>&& resource_, SP<
         }
     });
 
-    m_listeners.surfaceStateCommit = m_surface->m_events.stateCommit2.listen([this](auto state) {
-        if (!state || !state->pendingTimeout.has_value() || !m_surface || m_surface->isTearing())
+    m_listeners.surfaceContentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (!update || !update->state().pendingTimeout.has_value() || !m_surface || m_surface->isTearing())
             return;
 
-        m_surface->m_stateQueue.lock(state, LOCK_REASON_TIMER);
+        update->addConstraint(eContentUpdateConstraint::TIMER);
 
-        std::erase_if(m_pendingTimedStates, [](const WP<SSurfaceState>& ws) { return !ws; });
-        m_pendingTimedStates.emplace_back(state);
+        std::erase_if(m_pendingTimedUpdates, [](const WP<CContentUpdate>& pending) { return !pending; });
+        m_pendingTimedUpdates.emplace_back(update);
 
-        if (!state->timer) {
-            state->timer = makeShared<CEventLoopTimer>(
-                state->pendingTimeout,
-                [surface = m_surface, state](SP<CEventLoopTimer> self, void* data) {
-                    if (!surface || !state)
+        auto& state = update->state();
+        if (!state.timer) {
+            state.timer = makeShared<CEventLoopTimer>(
+                state.pendingTimeout,
+                [surface = m_surface, update](SP<CEventLoopTimer> self, void* data) {
+                    if (!surface || !update)
                         return;
 
-                    surface->m_stateQueue.unlock(state, LOCK_REASON_TIMER);
+                    surface->m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::TIMER);
                 },
                 nullptr);
-            g_pEventLoopManager->addTimer(state->timer);
+            g_pEventLoopManager->addTimer(state.timer);
         } else
-            state->timer->updateTimeout(state->pendingTimeout);
+            state.timer->updateTimeout(state.pendingTimeout);
 
-        state->pendingTimeout.reset();
+        state.pendingTimeout.reset();
     });
 }
 
@@ -72,14 +73,14 @@ void CCommitTimerResource::releaseDueStates(const Time::steady_tp& upcomingFlip)
     if (!m_surface)
         return;
 
-    std::erase_if(m_pendingTimedStates, [this, &upcomingFlip](const WP<SSurfaceState>& ws) {
-        if (!ws)
+    std::erase_if(m_pendingTimedUpdates, [this, &upcomingFlip](const WP<CContentUpdate>& update) {
+        if (!update)
             return true;
 
-        if (!ws->commitTimingTarget.has_value() || *ws->commitTimingTarget > upcomingFlip)
+        if (!update->state().commitTimingTarget.has_value() || *update->state().commitTimingTarget > upcomingFlip)
             return false; // not due yet, keep waiting
 
-        m_surface->m_stateQueue.unlock(ws, LOCK_REASON_TIMER);
+        m_surface->m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::TIMER);
         return true;
     });
 }

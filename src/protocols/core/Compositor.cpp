@@ -10,6 +10,7 @@
 #include "../Viewporter.hpp"
 #include "../../output/Monitor.hpp"
 #include "../PresentationTime.hpp"
+#include "../Fifo.hpp"
 #include "../DRMSyncobj.hpp"
 #include "../types/DMABuffer.hpp"
 #include "../../render/Renderer.hpp"
@@ -159,45 +160,27 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : m_resource(re
             m_pending.damage.intersect(CBox{{}, m_pending.size});
 
         m_events.precommit.emit();
-        if (m_pending.rejected) {
-            m_pending.rejected = false;
-            PROTO::presentation->discardFeedbacks(m_pending.presentationFeedbacks);
-            dropPendingBuffer();
-            return;
-        }
 
-        // null buffer attached
-        if (!m_pending.buffer && m_pending.updated.bits.buffer) {
-            commitState(m_pending);
-
-            // remove any pending states.
-            m_stateQueue.clear();
-            m_pending.reset();
-            return;
-        }
-
-        // save state while we wait for buffer to become ready
-        auto state = m_stateQueue.enqueue(makeUnique<SSurfaceState>(m_pending));
+        auto update = m_contentUpdates.enqueue(makeUnique<CContentUpdate>(m_pending, m_self));
         m_pending.reset();
+        prepareFifoState(*update);
 
-        // fifo and fences first
-        m_events.stateCommit.emit(state);
+        m_events.contentUpdate.emit(update);
 
-        if (state->buffer && state->buffer->type() == Aquamarine::BUFFER_TYPE_DMABUF && state->buffer->dmabuf().success && !state->updated.bits.acquire) {
-            state->buffer->m_syncFds = dc<CDMABuffer*>(state->buffer.m_buffer.get())->exportSyncFiles();
-            if (!state->buffer->m_syncFds.empty())
-                m_stateQueue.lock(state, LOCK_REASON_FENCE);
+        auto& state = update->state();
+        if (state.buffer && state.buffer->type() == Aquamarine::BUFFER_TYPE_DMABUF && state.buffer->dmabuf().success && !state.updated.bits.acquire) {
+            state.buffer->m_syncFds = dc<CDMABuffer*>(state.buffer.m_buffer.get())->exportSyncFiles();
+            if (!state.buffer->m_syncFds.empty())
+                m_contentUpdates.addConstraint(update, eContentUpdateConstraint::FENCE);
         }
 
-        // now for timer.
-        m_events.stateCommit2.emit(state);
-
-        if (state->rejected) {
-            m_stateQueue.dropState(state);
+        if (state.rejected) {
+            m_contentUpdates.drop(update);
             return;
         }
 
-        scheduleState(state);
+        scheduleUpdate(update);
+        m_contentUpdates.finalize(update);
     });
 
     m_resource->setDamage([this](CWlSurface* r, int32_t x, int32_t y, int32_t w, int32_t h) {
@@ -279,6 +262,8 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : m_resource(re
 }
 
 CWLSurfaceResource::~CWLSurfaceResource() {
+    if (m_fifoEmergencyTimer)
+        m_fifoEmergencyTimer->cancel();
     discardPresentationFeedbacks();
     m_events.destroy.emit();
 }
@@ -556,6 +541,7 @@ void CWLSurfaceResource::unmap() {
     m_mapped        = false;
     m_lastTransform = std::nullopt;
     m_lastScale     = std::nullopt;
+    clearFifoBarrier(m_fifoBarrier.activeEpoch());
 
     // release the buffers.
     // this is necessary for XWayland to function correctly,
@@ -590,64 +576,64 @@ CBox CWLSurfaceResource::extends() {
     return full.getExtents();
 }
 
-void CWLSurfaceResource::scheduleState(WP<SSurfaceState> state) {
-    auto whenReadable = [this, surf = m_self](WP<SSurfaceState> state) {
-        if (!surf || !state)
+void CWLSurfaceResource::scheduleUpdate(WP<CContentUpdate> update) {
+    auto whenReadable = [this, surface = m_self](const WP<CContentUpdate>& update) {
+        if (!surface || !update)
             return;
 
-        m_stateQueue.unlockFence(state);
+        m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
     };
 
-    if (state->updated.bits.acquire) {
-        auto waiter = state->acquire.addWaiter([state, whenReadable]() { whenReadable(state); });
-        // the waiter may have fired (and dropped this state), so re check.
-        if (state) {
-            state->acquireWaiter = waiter;
-            // a null waiter means it either fired immediately or failed to register
-            if (!waiter)
-                whenReadable(state);
+    auto& state = update->state();
+    if (state.updated.bits.acquire) {
+        // wait on acquire point for this surface, from explicit sync protocol
+        if (!state.acquire.addWaiter([update, whenReadable]() { whenReadable(update); })) {
+            Log::logger->log(Log::ERR, "Failed to addWaiter in CWLSurfaceResource::scheduleUpdate");
+            whenReadable(update);
         }
-    } else if (state->buffer && state->buffer->isSynchronous()) {
+    } else if (state.buffer && state.buffer->isSynchronous()) {
         // synchronous (shm) buffers can be read immediately
-        m_stateQueue.unlockFence(state);
-    } else if (state->buffer && !state->buffer->m_syncFds.empty()) {
+        m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
+    } else if (state.buffer && !state.buffer->m_syncFds.empty()) {
         // async buffer and is dmabuf, then we can wait on implicit fences
-        drainSyncFds(state, LOCK_REASON_FENCE);
+        drainSyncFds(update);
     } else {
         // state commit without a buffer.
-        m_stateQueue.tryProcess();
+        m_contentUpdates.tryProcess();
     }
 }
 
-void CWLSurfaceResource::drainSyncFds(WP<SSurfaceState> state, eLockReason reason) {
-    auto& fds = state->buffer->m_syncFds;
+void CWLSurfaceResource::drainSyncFds(WP<CContentUpdate> update) {
+    auto& fds = update->state().buffer->m_syncFds;
 
     std::erase_if(fds, [](const auto& fd) { return fd.isReadable(); });
 
     if (!fds.empty()) {
         auto fd = std::move(fds.front());
         fds.erase(fds.begin());
-        auto waiter = g_pEventLoopManager->doOnReadable(std::move(fd), [this, surf = m_self, state, reason]() {
-            if (!surf || !state)
+        g_pEventLoopManager->doOnReadable(std::move(fd), [this, surface = m_self, update]() {
+            if (!surface || !update)
                 return;
 
-            drainSyncFds(state, reason);
+            drainSyncFds(update);
         });
-
-        if (state)
-            state->acquireWaiter = waiter;
         return;
     }
 
-    m_stateQueue.unlockFence(state);
+    m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
 }
 
-void CWLSurfaceResource::commitState(SSurfaceState& state) {
-    if (!state.updated.all && m_mapped)
-        return;
+void CWLSurfaceResource::commitState(CContentUpdate& update) {
+    auto& state = update.state();
+    // only a new buffer supersedes the current, not yet presented content.
+    if (state.updated.bits.buffer)
+        PROTO::presentation->discardFeedbacks(m_current.presentationFeedbacks);
 
     auto lastTexture = m_current.texture;
     m_current.updateFrom(state);
+
+    if (state.fifoBarrierEpoch != 0)
+        activateFifoBarrier(state.fifoBarrierEpoch);
 
     if (m_current.buffer) {
         if (m_current.buffer->isSynchronous())
@@ -771,6 +757,113 @@ bool CWLSurfaceResource::isTearing() {
     return false;
 }
 
+void CWLSurfaceResource::prepareFifoState(CContentUpdate& update) {
+    auto& state = update.state();
+    if (state.waitBarrier) {
+        const uint64_t QUEUED_EPOCH = m_contentUpdates.latestFifoBarrierEpoch();
+        state.fifoWaitEpoch         = QUEUED_EPOCH != 0 ? QUEUED_EPOCH : m_fifoBarrier.activeEpoch();
+        if (state.fifoWaitEpoch != 0 && NFifo::shouldLock(m_self.lock()))
+            update.addConstraint(eContentUpdateConstraint::FIFO);
+        else if (state.fifoWaitEpoch == 0) {
+            static const auto PPEND = CConfigValue<Config::INTEGER>("debug:fifo_pending_workaround");
+            if (*PPEND)
+                scheduleFifoFrame();
+        }
+    }
+
+    if (state.barrierSet)
+        state.fifoBarrierEpoch = m_fifoBarrier.reserveEpoch();
+}
+
+void CWLSurfaceResource::activateFifoBarrier(uint64_t epoch) {
+    if (epoch == 0)
+        return;
+
+    m_fifoBarrier.activate(epoch);
+    if (!m_mapped) {
+        m_fifoBarrier.clear(epoch);
+        return;
+    }
+
+    constexpr auto EMERGENCY_TIMEOUT = std::chrono::seconds(1);
+    if (!m_fifoEmergencyTimer) {
+        m_fifoEmergencyTimer = makeShared<CEventLoopTimer>(
+            EMERGENCY_TIMEOUT,
+            [surface = m_self](SP<CEventLoopTimer> self, void*) {
+                if (self)
+                    self->updateTimeout(std::nullopt);
+                if (surface)
+                    surface->clearFifoBarrier(surface->fifoBarrierEpoch());
+            },
+            nullptr);
+        g_pEventLoopManager->addTimer(m_fifoEmergencyTimer);
+    } else
+        m_fifoEmergencyTimer->updateTimeout(EMERGENCY_TIMEOUT);
+
+    scheduleFifoFrame();
+}
+
+bool CWLSurfaceResource::fifoBarrierMatches(uint64_t epoch) const {
+    return m_fifoBarrier.matches(epoch);
+}
+
+uint64_t CWLSurfaceResource::fifoBarrierEpoch() const {
+    return m_fifoBarrier.activeEpoch();
+}
+
+void CWLSurfaceResource::stageFifoLatch(PHLMONITOR monitor, bool discarded) {
+    const uint64_t EPOCH = m_fifoBarrier.activeEpoch();
+    if (EPOCH == 0)
+        return;
+
+    if (discarded) {
+        clearFifoBarrier(EPOCH);
+        return;
+    }
+
+    if (!monitor || monitor->m_tearingState.activelyTearing)
+        return;
+
+    monitor->stageFifoLatch(m_self, EPOCH);
+}
+
+void CWLSurfaceResource::clearFifoBarrier(uint64_t epoch) {
+    if (!m_fifoBarrier.clear(epoch))
+        return;
+
+    if (m_fifoEmergencyTimer)
+        m_fifoEmergencyTimer->updateTimeout(std::nullopt);
+
+    m_contentUpdates.clearFifoEpoch(epoch);
+    if (m_mapped)
+        scheduleFifoFrame();
+}
+
+void CWLSurfaceResource::scheduleFifoFrame() {
+    auto schedule = [](PHLMONITOR monitor) {
+        if (monitor && monitor->m_enabled && !monitor->m_tearingState.activelyTearing)
+            monitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEEDS_FRAME);
+    };
+
+    if (!m_enteredOutputs.empty()) {
+        for (const auto& monitor : m_enteredOutputs)
+            schedule(monitor.lock());
+        return;
+    }
+
+    if (!m_hlSurface)
+        return;
+
+    const auto BOX = m_hlSurface->getSurfaceBoxGlobal();
+    if (!BOX)
+        return;
+
+    for (const auto& monitor : State::monitorState()->monitors()) {
+        if (monitor && !BOX->intersection({monitor->m_position, monitor->m_size}).empty())
+            schedule(monitor);
+    }
+}
+
 void CWLSurfaceResource::updateCursorShm(CRegion damage) {
     if (damage.empty())
         return;
@@ -815,6 +908,7 @@ void CWLSurfaceResource::updateCursorShm(CRegion damage) {
 
 void CWLSurfaceResource::presentFeedback(const Time::steady_tp& when, PHLMONITOR pMonitor, bool discarded) {
     frame(when);
+    stageFifoLatch(pMonitor, discarded);
 
     // if it's empty then CPresentationProtocol::m_feedbacks doesn't contain any feedback listeners for this surface and frame
     if (m_current.presentationFeedbacks.empty())
@@ -852,8 +946,8 @@ CWLCompositorResource::CWLCompositorResource(SP<CWlCompositor> resource_) : m_re
             return;
         }
 
-        RESOURCE->m_self       = RESOURCE;
-        RESOURCE->m_stateQueue = CSurfaceStateQueue(RESOURCE);
+        RESOURCE->m_self           = RESOURCE;
+        RESOURCE->m_contentUpdates = CContentUpdateQueue(RESOURCE);
 
         LOGM(Log::DEBUG, "New wl_surface with id {} at {:x}", id, (uintptr_t)RESOURCE.get());
 

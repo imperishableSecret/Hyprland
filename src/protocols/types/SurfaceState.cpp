@@ -6,6 +6,36 @@
 #include "render/Renderer.hpp"
 #include "render/Texture.hpp"
 
+uint64_t CFifoBarrierCondition::reserveEpoch() {
+    const uint64_t EPOCH = m_nextEpoch++;
+    if (m_nextEpoch == 0)
+        m_nextEpoch = 1;
+    return EPOCH;
+}
+
+void CFifoBarrierCondition::activate(uint64_t epoch) {
+    if (epoch == 0)
+        return;
+
+    m_activeEpoch = epoch;
+}
+
+bool CFifoBarrierCondition::clear(uint64_t epoch) {
+    if (!matches(epoch))
+        return false;
+
+    m_activeEpoch = 0;
+    return true;
+}
+
+bool CFifoBarrierCondition::matches(uint64_t epoch) const {
+    return epoch != 0 && m_activeEpoch == epoch;
+}
+
+uint64_t CFifoBarrierCondition::activeEpoch() const {
+    return m_activeEpoch;
+}
+
 Vector2D SSurfaceState::sourceSize() {
     if UNLIKELY (!texture)
         return {};
@@ -76,11 +106,12 @@ void SSurfaceState::reset() {
 
     callbacks.clear();
     presentationFeedbacks.clear();
-    lockMask = LOCK_REASON_NONE;
+    rejected = false;
 
-    barrierSet            = false;
-    barrierWait           = false;
-    waitingOnPresentation = false;
+    barrierSet       = false;
+    waitBarrier      = false;
+    fifoBarrierEpoch = 0;
+    fifoWaitEpoch    = 0;
 
     pendingTimeout.reset();
     commitTimingTarget.reset();
@@ -225,7 +256,4 @@ void SSurfaceState::updateFrom(SSurfaceState& ref) {
                                      std::make_move_iterator(ref.presentationFeedbacks.end()));
         ref.presentationFeedbacks.clear();
     }
-
-    if (ref.barrierSet)
-        waitingOnPresentation = true;
 }

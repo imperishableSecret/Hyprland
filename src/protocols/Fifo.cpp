@@ -1,14 +1,50 @@
 #include "Fifo.hpp"
-#include "Compositor.hpp"
 #include "core/Compositor.hpp"
 #include "core/Subcompositor.hpp"
-#include "../output/Monitor.hpp"
-#include "../event/EventBus.hpp"
+#include "../config/ConfigValue.hpp"
 #include "../state/MonitorState.hpp"
 #include "../desktop/view/View.hpp"
+#include "../desktop/view/Window.hpp"
 #include "../render/Renderer.hpp"
+
 #include <algorithm>
-#include <hyprutils/memory/WeakPtr.hpp>
+
+static bool isSynchronizedSubsurface(SP<CWLSurfaceResource> surface) {
+    while (surface && surface->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
+        const auto SUBSURFACE = sc<CSubsurfaceRole*>(surface->m_role.get())->m_subsurface.lock();
+        if (!SUBSURFACE)
+            return false;
+        if (SUBSURFACE->m_sync)
+            return true;
+        surface = SUBSURFACE->m_parent.lock();
+    }
+
+    return false;
+}
+
+bool NFifo::shouldLock(const SP<CWLSurfaceResource>& surface) {
+    if (!surface || !surface->m_mapped || surface->isTearing() || isSynchronizedSubsurface(surface))
+        return false;
+
+    static const auto PINVIS = CConfigValue<Hyprlang::INT>("render:not_shown_fifo_lock");
+    if (*PINVIS == 0 || !surface->m_hlSurface)
+        return true;
+
+    const auto VIEW = surface->m_hlSurface->view();
+    if (!VIEW)
+        return true;
+
+    const auto WINDOW  = VIEW->type() == Desktop::View::VIEW_TYPE_WINDOW ? dynamicPointerCast<Desktop::View::CWindow>(VIEW) : nullptr;
+    const bool VISIBLE = VIEW->visible() &&
+        (!WINDOW || std::ranges::any_of(State::monitorState()->monitors(), [WINDOW](const auto& monitor) { return g_pHyprRenderer->shouldRenderWindow(WINDOW, monitor); }));
+    if (VISIBLE)
+        return true;
+    if (*PINVIS == 2)
+        return false;
+    if (WINDOW && WINDOW->m_ruleApplicator->renderUnfocused().valueOr(false))
+        return false;
+    return true;
+}
 
 // what nvidia says about the empty extra barrier commit.
 /*
@@ -55,62 +91,8 @@ CFifoResource::CFifoResource(UP<CWpFifoV1>&& resource_, SP<CWLSurfaceResource> s
             return;
         }
 
-        m_surface->m_pending.barrierWait = true;
-    });
-
-    m_listeners.surfaceStateCommit = m_surface->m_events.stateCommit.listen([this](auto state) {
-        if (!state)
-            return;
-
-        if (!state->barrierSet && !state->barrierWait)
-            return;
-
-        // the barrier constraint must be ignored for a subsurface in synchronized mode.
-        if (m_surface->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
-            const auto sub = dynamicPointerCast<CSubsurfaceRole>(m_surface->m_role);
-            if (sub) {
-                const auto subsurface = sub->m_subsurface.lock();
-                if (subsurface && subsurface->m_sync)
-                    return;
-            }
-        }
-
-        // check if entered outputs yet, and they are not tearing.
-        if (!checkMonitors())
-            return;
-
-        // only lock once its mapped and visible and actually has something waiting for a presentation.
-        if (m_surface->m_mapped && m_surface->m_current.waitingOnPresentation) {
-            bool shouldLock = false;
-            if (state->barrierSet && state->barrierWait) {
-                static const auto PINVIS = CConfigValue<Hyprlang::INT>("render:not_shown_fifo_lock");
-                shouldLock               = *PINVIS == 0 || !m_surface->m_hlSurface; // always && unknown
-                if (!shouldLock && m_surface->m_hlSurface) {
-                    const auto& view = m_surface->m_hlSurface->view();
-                    if (view) {
-                        const auto& window    = view->type() == Desktop::View::VIEW_TYPE_WINDOW ? dynamicPointerCast<Desktop::View::CWindow>(view) : nullptr;
-                        const bool  isVisible = (view && view->visible() && //
-                                                 (!window || std::ranges::any_of(State::monitorState()->monitors(), [window](const auto& mon) {
-                                                    return g_pHyprRenderer->shouldRenderWindow(window, mon);
-                                                 })));
-                        if (isVisible)
-                            shouldLock = true;
-                        else if (*PINVIS == 2) // never
-                            shouldLock = false;
-                        else if (window && window->m_ruleApplicator->renderUnfocused().valueOr(false))
-                            shouldLock = false; // ignore render_unfocused
-                        else
-                            shouldLock = true;
-                    } else
-                        shouldLock = true;
-                }
-            }
-
-            if (shouldLock) {
-                state->updated.bits.fifo = true;
-                m_surface->m_stateQueue.lock(state, LOCK_REASON_FIFO);
-            }
-        }
+        m_surface->m_pending.waitBarrier       = true;
+        m_surface->m_pending.updated.bits.fifo = true;
     });
 }
 
@@ -120,41 +102,6 @@ CFifoResource::~CFifoResource() {
 
 bool CFifoResource::good() {
     return m_resource->resource();
-}
-
-void CFifoResource::presented() {
-    m_surface->m_current.waitingOnPresentation = false;
-    m_surface->m_stateQueue.unlockFirst(LOCK_REASON_FIFO);
-}
-
-bool CFifoResource::checkMonitors() {
-    bool allowFifo = false;
-    if (m_surface->m_enteredOutputs.empty() && m_surface->m_hlSurface) {
-        for (auto& m : State::monitorState()->monitors()) {
-            if (!m || !m->m_enabled)
-                continue;
-
-            auto box = m_surface->m_hlSurface->getSurfaceBoxGlobal();
-            if (box && !box->intersection({m->m_position, m->m_size}).empty()) {
-                if (m->m_tearingState.activelyTearing)
-                    return false; // dont fifo lock on tearing.
-
-                allowFifo = true; // intersects.
-            }
-        }
-    } else {
-        for (auto& m : m_surface->m_enteredOutputs) {
-            if (!m)
-                continue;
-
-            if (m->m_tearingState.activelyTearing)
-                return false; // dont fifo lock on tearing.
-
-            allowFifo = true;
-        }
-    }
-
-    return allowFifo;
 }
 
 CFifoManagerResource::CFifoManagerResource(UP<CWpFifoManagerV1>&& resource_) : m_resource(std::move(resource_)) {
@@ -204,14 +151,7 @@ bool CFifoManagerResource::good() {
 }
 
 CFifoProtocol::CFifoProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
-    static auto P = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR M) {
-        M->m_events.presented.listenStatic([this, m = PHLMONITORREF{M}](const Time::steady_tp&) {
-            if (!m || !PROTO::fifo)
-                return;
-
-            onMonitorPresent(m.lock());
-        });
-    });
+    ;
 }
 
 void CFifoProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
@@ -230,33 +170,4 @@ void CFifoProtocol::destroyResource(CFifoManagerResource* res) {
 
 void CFifoProtocol::destroyResource(CFifoResource* res) {
     std::erase_if(m_fifos, [&](const auto& other) { return other.get() == res; });
-}
-
-void CFifoProtocol::onMonitorPresent(PHLMONITOR m) {
-    if (m->m_tearingState.activelyTearing)
-        return; // fifo isnt locked on tearing.
-
-    for (const auto& fifo : m_fifos) {
-        if (!fifo->m_surface)
-            continue;
-
-        if (!fifo->m_surface->m_mapped) {
-            fifo->presented();
-            continue;
-        }
-
-        auto it = std::ranges::find_if(fifo->m_surface->m_enteredOutputs, [m](auto& mon) { return mon == m; });
-        if (it != fifo->m_surface->m_enteredOutputs.end()) {
-            fifo->presented();
-            continue;
-        }
-
-        if (fifo->m_surface->m_hlSurface) {
-            auto box = fifo->m_surface->m_hlSurface->getSurfaceBoxGlobal();
-            if (box && !box->intersection({m->m_position, m->m_size}).empty()) {
-                fifo->presented();
-                continue;
-            }
-        }
-    }
 }

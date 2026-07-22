@@ -202,7 +202,7 @@ IHyprRenderer::IHyprRenderer() {
 
                 w->wlSurface()->resource()->breadthfirst(
                     [](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) {
-                        surf->m_stateQueue.unlockFirst(LOCK_REASON_FENCE | LOCK_REASON_FIFO | LOCK_REASON_TIMER);
+                        surf->m_contentUpdates.clearFirstConstraints(eContentUpdateConstraint::FENCE | eContentUpdateConstraint::FIFO | eContentUpdateConstraint::TIMER);
                         surf->presentFeedback(Time::steadyNow(), Desktop::focusState()->monitor(), true);
                     },
                     nullptr);
@@ -2113,6 +2113,7 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
         return {};
 
     PROTO::presentation->beginOutputFrame(pMonitor);
+    pMonitor->beginFifoFrame();
 
     // tearing and DS first
     bool       shouldTear              = pMonitor->updateTearing();

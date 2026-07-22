@@ -1,13 +1,14 @@
 #pragma once
 
 #include <vector>
-#include <unordered_map>
 #include "WaylandProtocol.hpp"
 #include "fifo-v1.hpp"
 
-#include "../helpers/signal/Signal.hpp"
-
 class CWLSurfaceResource;
+
+namespace NFifo {
+    bool shouldLock(const SP<CWLSurfaceResource>& surface);
+}
 
 class CFifoResource {
   public:
@@ -21,15 +22,8 @@ class CFifoResource {
 
     WP<CWLSurfaceResource> m_surface;
 
-    struct {
-        CHyprSignalListener surfaceStateCommit;
-    } m_listeners;
-
-    void presented();
-    bool checkMonitors();
-
-    friend class CFifoProtocol;
     friend class CFifoManagerResource;
+    friend class CFifoProtocol;
 };
 
 class CFifoManagerResource {
@@ -52,8 +46,6 @@ class CFifoProtocol : public IWaylandProtocol {
   private:
     void destroyResource(CFifoManagerResource* resource);
     void destroyResource(CFifoResource* resource);
-
-    void onMonitorPresent(PHLMONITOR m);
 
     //
     std::vector<UP<CFifoManagerResource>> m_managers;

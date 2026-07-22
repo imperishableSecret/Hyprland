@@ -2148,7 +2148,36 @@ bool CMonitor::commitOutput(bool zeroCopy) {
     m_output->state->setPresentationID(PRESENTATION_ID);
     const bool SUCCESS = m_output->commit();
     PROTO::presentation->finishOutputCommit(m_self.lock(), PRESENTATION_ID, SUCCESS);
+    if (SUCCESS && BUFFER_COMMITTED && !m_tearingState.activelyTearing)
+        finishFifoLatches();
     return SUCCESS;
+}
+
+void CMonitor::beginFifoFrame() {
+    m_stagedFifoLatches.clear();
+}
+
+void CMonitor::stageFifoLatch(WP<CWLSurfaceResource> surface, uint64_t epoch) {
+    if (!surface || epoch == 0)
+        return;
+
+    const auto LATCH = std::ranges::find_if(m_stagedFifoLatches, [surface, epoch](const auto& latch) { return latch.surface == surface && latch.epoch == epoch; });
+    if (LATCH == m_stagedFifoLatches.end())
+        m_stagedFifoLatches.emplace_back(SFifoLatch{.surface = std::move(surface), .epoch = epoch});
+}
+
+bool CMonitor::hasStagedFifoLatches() const {
+    return !m_stagedFifoLatches.empty();
+}
+
+void CMonitor::finishFifoLatches() {
+    auto latches = std::move(m_stagedFifoLatches);
+    m_stagedFifoLatches.clear();
+
+    for (const auto& latch : latches) {
+        if (latch.surface)
+            latch.surface->clearFifoBarrier(latch.epoch);
+    }
 }
 
 bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer) {
@@ -2160,12 +2189,13 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
     const bool VRR_KEEPALIVE_DUE       = isVrrKeepaliveDue();
     const bool OUTPUT_STATE_COMMIT_DUE = m_output->state->state().committed != 0;
     const bool PRESENTATION_COMMIT_DUE = PROTO::presentation->hasStagedData(m_self.lock());
+    const bool FIFO_COMMIT_DUE         = *PSAMEFIFO && hasStagedFifoLatches();
 
-    if (CURSOR_COMMIT_DUE || VRR_KEEPALIVE_DUE || OUTPUT_STATE_COMMIT_DUE || PRESENTATION_COMMIT_DUE) {
+    if (CURSOR_COMMIT_DUE || VRR_KEEPALIVE_DUE || OUTPUT_STATE_COMMIT_DUE || PRESENTATION_COMMIT_DUE || FIFO_COMMIT_DUE) {
         m_output->state->setBuffer(buffer);
         if (!m_state.test() || !commitOutput(true)) {
-            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursor: {}, keepalive: {}, output state: {}, presentation: {}", CURSOR_COMMIT_DUE,
-                             VRR_KEEPALIVE_DUE, OUTPUT_STATE_COMMIT_DUE, PRESENTATION_COMMIT_DUE);
+            Log::logger->log(Log::TRACE, "attemptDirectScanout: failed same-buffer commit, cursor: {}, keepalive: {}, output state: {}, presentation: {}, fifo: {}",
+                             CURSOR_COMMIT_DUE, VRR_KEEPALIVE_DUE, OUTPUT_STATE_COMMIT_DUE, PRESENTATION_COMMIT_DUE, FIFO_COMMIT_DUE);
             m_lastScanout.reset();
             m_activeScanoutSurface.reset();
             return false;
@@ -2174,9 +2204,6 @@ bool CMonitor::attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP
         m_scanoutNeedsCursorUpdate = false;
         return true;
     }
-
-    if (surface->m_fifo && !m_tearingState.activelyTearing && *PSAMEFIFO)
-        surface->m_stateQueue.unlockFirst(LOCK_REASON_FIFO);
 
     return true;
 }

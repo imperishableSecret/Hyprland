@@ -14,7 +14,7 @@
 #include <cstdint>
 #include "../WaylandProtocol.hpp"
 #include "../../render/Texture.hpp"
-#include "../types/SurfaceStateQueue.hpp"
+#include "../types/ContentUpdate.hpp"
 #include "wayland.hpp"
 #include "../../desktop/view/WLSurface.hpp"
 #include "../../helpers/signal/Signal.hpp"
@@ -91,10 +91,9 @@ class CWLSurfaceResource {
     void                          resetRole();
 
     struct {
-        CSignalT<>                          precommit;    // before commit
-        CSignalT<WP<SSurfaceState>>         stateCommit;  // when placing state in queue
-        CSignalT<WP<SSurfaceState>>         stateCommit2; // when placing state in queue used for commit timing so we apply fifo/fences first.
-        CSignalT<>                          commit;       // after commit
+        CSignalT<>                          precommit;     // before commit
+        CSignalT<WP<CContentUpdate>>        contentUpdate; // after enqueue, before finalization
+        CSignalT<>                          commit;        // after commit
         CSignalT<>                          map;
         CSignalT<>                          unmap;
         CSignalT<SP<CWLSubsurfaceResource>> newSubsurface;
@@ -105,7 +104,7 @@ class CWLSurfaceResource {
 
     SSurfaceState                          m_current;
     SSurfaceState                          m_pending;
-    CSurfaceStateQueue                     m_stateQueue;
+    CContentUpdateQueue                    m_contentUpdates;
 
     WP<CWLSurfaceResource>                 m_self;
     WP<Desktop::View::CWLSurface>          m_hlSurface;
@@ -123,13 +122,17 @@ class CWLSurfaceResource {
     SP<CWLSurfaceResource>                 findFirstPreorder(std::function<bool(SP<CWLSurfaceResource>)> fn);
     SP<CWLSurfaceResource>                 findWithCM();
     void                                   presentFeedback(const Time::steady_tp& when, PHLMONITOR pMonitor, bool discarded = false);
-    void                                   scheduleState(WP<SSurfaceState> state);
-    void                                   drainSyncFds(WP<SSurfaceState> state, eLockReason reason);
-    void                                   commitState(SSurfaceState& state);
+    void                                   scheduleUpdate(WP<CContentUpdate> update);
+    void                                   drainSyncFds(WP<CContentUpdate> update);
+    void                                   commitState(CContentUpdate& update);
     NColorManagement::PImageDescription    getPreferredImageDescription();
     void                                   sortSubsurfaces();
     bool                                   hasVisibleSubsurface();
     bool                                   isTearing();
+    bool                                   fifoBarrierMatches(uint64_t epoch) const;
+    uint64_t                               fifoBarrierEpoch() const;
+    void                                   stageFifoLatch(PHLMONITOR monitor, bool discarded = false);
+    void                                   clearFifoBarrier(uint64_t epoch);
 
     // returns a pair: found surface (null if not found) and surface local coords.
     // localCoords param is relative to 0,0 of this surface
@@ -140,6 +143,8 @@ class CWLSurfaceResource {
     wl_client*                         m_client        = nullptr;
     std::optional<wl_output_transform> m_lastTransform = std::nullopt;
     std::optional<int>                 m_lastScale     = std::nullopt;
+    CFifoBarrierCondition              m_fifoBarrier;
+    SP<CEventLoopTimer>                m_fifoEmergencyTimer;
 
     void                               destroy();
     void                               releaseBuffers(bool onlyCurrent = true);
@@ -149,6 +154,9 @@ class CWLSurfaceResource {
     void                               bfHelper(std::span<const SP<CWLSurfaceResource>> nodes, std::function<void(SP<CWLSurfaceResource>, const Vector2D&, void*)> fn, void* data);
     SP<CWLSurfaceResource>             findFirstPreorderHelper(SP<CWLSurfaceResource> root, std::function<bool(SP<CWLSurfaceResource>)> fn);
     void                               updateCursorShm(CRegion damage = CBox{0, 0, INT16_MAX, INT16_MAX});
+    void                               prepareFifoState(CContentUpdate& update);
+    void                               activateFifoBarrier(uint64_t epoch);
+    void                               scheduleFifoFrame();
 
     friend class CWLPointerResource;
 };

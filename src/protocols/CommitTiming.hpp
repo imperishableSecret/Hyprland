@@ -9,7 +9,7 @@
 
 class CWLSurfaceResource;
 class CEventLoopTimer;
-struct SSurfaceState;
+class CContentUpdate;
 
 class CCommitTimerResource {
   public:
@@ -21,14 +21,14 @@ class CCommitTimerResource {
     UP<CWpCommitTimerV1>   m_resource;
     WP<CWLSurfaceResource> m_surface;
 
-    // states this timer has TIMER-locked and not yet released; drained by the per-present path.
-    std::vector<WP<SSurfaceState>> m_pendingTimedStates;
+    // Content Updates this timer has constrained and not yet released; drained by the per-present path.
+    std::vector<WP<CContentUpdate>> m_pendingTimedUpdates;
 
-    // release the TIMER lock on any queued state whose target is at or before the upcoming flip.
+    // Release the TIMER constraint on updates whose target is at or before the upcoming flip.
     void releaseDueStates(const Time::steady_tp& upcomingFlip);
 
     struct {
-        CHyprSignalListener surfaceStateCommit;
+        CHyprSignalListener surfaceContentUpdate;
     } m_listeners;
 
     friend class CCommitTimingProtocol;

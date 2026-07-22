@@ -14,30 +14,20 @@ class CWLCallbackResource;
 class CPresentationFeedback;
 struct SReadableWaiter;
 
-enum eLockReason : uint8_t {
-    LOCK_REASON_NONE  = 0,
-    LOCK_REASON_FENCE = 1 << 0,
-    LOCK_REASON_FIFO  = 1 << 1,
-    LOCK_REASON_TIMER = 1 << 2
-};
+class CFifoBarrierCondition {
+  public:
+    uint64_t reserveEpoch();
+    void     activate(uint64_t epoch);
+    bool     clear(uint64_t epoch);
+    bool     matches(uint64_t epoch) const;
+    uint64_t activeEpoch() const;
 
-inline eLockReason operator|(eLockReason a, eLockReason b) {
-    return sc<eLockReason>(sc<uint8_t>(a) | sc<uint8_t>(b));
-}
-inline eLockReason operator&(eLockReason a, eLockReason b) {
-    return sc<eLockReason>(sc<uint8_t>(a) & sc<uint8_t>(b));
-}
-inline eLockReason& operator|=(eLockReason& a, eLockReason b) {
-    a = a | b;
-    return a;
-}
-inline eLockReason& operator&=(eLockReason& a, eLockReason b) {
-    a = a & b;
-    return a;
-}
-inline eLockReason operator~(eLockReason a) {
-    return sc<eLockReason>(~sc<uint8_t>(a));
-}
+  private:
+    uint64_t m_activeEpoch = 0;
+    uint64_t m_nextEpoch   = 1;
+
+    friend class CFifoBarrierConditionTestAccess;
+};
 
 struct SSurfaceState {
     union {
@@ -93,18 +83,17 @@ struct SSurfaceState {
     Vector2D sourceSize();
 
     // drm syncobj protocol surface state
-    CDRMSyncPointState  acquire;
-    WP<SReadableWaiter> acquireWaiter;
-    eLockReason         lockMask = LOCK_REASON_NONE;
+    CDRMSyncPointState acquire;
 
     // texture of surface content, used for rendering
     SP<Render::ITexture> texture;
     void                 updateSynchronousTexture(SP<Render::ITexture> lastTexture);
 
     // fifo
-    bool barrierSet            = false;
-    bool barrierWait           = false;
-    bool waitingOnPresentation = false;
+    bool     barrierSet       = false;
+    bool     waitBarrier      = false;
+    uint64_t fifoBarrierEpoch = 0;
+    uint64_t fifoWaitEpoch    = 0;
 
     // commit timing
     std::optional<Time::steady_dur> pendingTimeout;
