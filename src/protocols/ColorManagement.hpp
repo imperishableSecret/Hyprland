@@ -22,6 +22,8 @@ class CColorManager {
     wl_client* client();
 
   private:
+    void                  onGetSurface(CWpColorManagerV1* resource, uint32_t id, wl_resource* surface);
+
     SP<CWpColorManagerV1> m_resource;
 };
 
@@ -67,10 +69,25 @@ class CColorManagementSurface {
     SP<CWpColorManagementSurfaceV1>     m_resource;
     wl_client*                          m_client = nullptr;
     NColorManagement::PImageDescription m_imageDescription;
+    NColorManagement::PImageDescription m_pendingImageDescription;
     NColorManagement::PImageDescription m_lastImageDescription;
-    bool                                m_hasImageDescription = false;
-    bool                                m_needsNewMetadata    = false;
+    bool                                m_hasImageDescription        = false;
+    bool                                m_pendingHasImageDescription = false;
+    bool                                m_dirty                      = false;
+    bool                                m_needsNewMetadata           = false;
     hdr_output_metadata                 m_hdrMetadata;
+
+    void                                setResource(SP<CWpColorManagementSurfaceV1> resource);
+    void                                destroy();
+
+    struct {
+        CHyprSignalListener contentUpdate;
+        CHyprSignalListener surfaceCommit;
+        CHyprSignalListener surfaceDestroy;
+    } m_listeners;
+
+    friend class CColorManager;
+    friend class CColorManagementProtocol;
 };
 
 class CColorManagementFeedbackSurface {

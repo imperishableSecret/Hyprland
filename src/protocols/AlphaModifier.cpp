@@ -27,22 +27,43 @@ void CAlphaModifier::setResource(UP<CWpAlphaModifierSurfaceV1>&& resource) {
             return;
         }
 
-        m_alpha = alpha / sc<float>(UINT32_MAX);
+        m_pendingAlpha = alpha / sc<float>(UINT32_MAX);
+        m_dirty        = true;
+    });
+
+    m_pendingEnabled = true;
+    m_dirty          = true;
+
+    m_listeners.contentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (!m_dirty)
+            return;
+
+        const float ALPHA   = m_pendingAlpha;
+        const bool  ENABLED = m_pendingEnabled;
+        update->addActivation([self = m_self, ALPHA, ENABLED] {
+            if (!self)
+                return;
+
+            self->m_currentAlpha   = ALPHA;
+            self->m_currentEnabled = ENABLED;
+        });
+        m_dirty = false;
     });
 
     m_listeners.surfaceCommitted = m_surface->m_events.commit.listen([this] {
-        auto surface = Desktop::View::CWLSurface::fromResource(m_surface.lock());
+        auto        surface = Desktop::View::CWLSurface::fromResource(m_surface.lock());
+        const float ALPHA   = m_currentEnabled ? m_currentAlpha : 1.F;
 
-        if (surface && surface->m_alphaModifier != m_alpha) {
-            surface->m_alphaModifier = m_alpha;
+        if (surface && surface->m_alphaModifier != ALPHA) {
+            surface->m_alphaModifier = ALPHA;
             auto box                 = surface->getSurfaceBoxGlobal();
 
             if (box.has_value())
                 g_pHyprRenderer->damageBox(*box);
-
-            if (!m_resource)
-                PROTO::alphaModifier->destroyAlphaModifier(this);
         }
+
+        if (!m_resource && !m_currentEnabled)
+            PROTO::alphaModifier->destroyAlphaModifier(this);
     });
 
     m_listeners.surfaceDestroyed = m_surface->m_events.destroy.listen([this] {
@@ -53,7 +74,9 @@ void CAlphaModifier::setResource(UP<CWpAlphaModifierSurfaceV1>&& resource) {
 
 void CAlphaModifier::destroy() {
     m_resource.reset();
-    m_alpha = 1.F;
+    m_pendingAlpha   = 1.F;
+    m_pendingEnabled = false;
+    m_dirty          = true;
 
     if (!m_surface)
         PROTO::alphaModifier->destroyAlphaModifier(this);
@@ -80,8 +103,8 @@ void CAlphaModifierProtocol::destroyAlphaModifier(CAlphaModifier* modifier) {
 }
 
 void CAlphaModifierProtocol::getSurface(CWpAlphaModifierV1* manager, uint32_t id, SP<CWLSurfaceResource> surface) {
-    CAlphaModifier* alphaModifier = nullptr;
-    auto            iter          = std::ranges::find_if(m_alphaModifiers, [&](const auto& entry) { return entry.second->m_surface == surface; });
+    WP<CAlphaModifier> alphaModifier;
+    auto               iter = std::ranges::find_if(m_alphaModifiers, [&](const auto& entry) { return entry.second->m_surface == surface; });
 
     if (iter != m_alphaModifiers.end()) {
         if (iter->second->m_resource) {
@@ -90,12 +113,15 @@ void CAlphaModifierProtocol::getSurface(CWpAlphaModifierV1* manager, uint32_t id
             return;
         } else {
             iter->second->setResource(makeUnique<CWpAlphaModifierSurfaceV1>(manager->client(), manager->version(), id));
-            alphaModifier = iter->second.get();
+            alphaModifier = WP<CAlphaModifier>{iter->second};
         }
     } else {
-        alphaModifier = m_alphaModifiers.emplace(surface, makeUnique<CAlphaModifier>(makeUnique<CWpAlphaModifierSurfaceV1>(manager->client(), manager->version(), id), surface))
-                            .first->second.get();
+        const auto IT =
+            m_alphaModifiers.emplace(surface, makeUnique<CAlphaModifier>(makeUnique<CWpAlphaModifierSurfaceV1>(manager->client(), manager->version(), id), surface)).first;
+        alphaModifier = WP<CAlphaModifier>{IT->second};
     }
+
+    alphaModifier->m_self = alphaModifier;
 
     if UNLIKELY (!alphaModifier->good()) {
         manager->noMemory();

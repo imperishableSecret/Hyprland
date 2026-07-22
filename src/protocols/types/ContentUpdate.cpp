@@ -52,6 +52,11 @@ void CContentUpdate::clearConstraint(eContentUpdateConstraint constraint) {
     m_constraints &= ~constraint;
 }
 
+void CContentUpdate::addActivation(std::move_only_function<void()>&& activation) {
+    ASSERT(!m_finalized);
+    m_activations.emplace_back(std::move(activation));
+}
+
 bool CContentUpdate::ready() const {
     return m_constraints == eContentUpdateConstraint::NONE;
 }
@@ -62,6 +67,11 @@ bool CContentUpdate::finalized() const {
 
 void CContentUpdate::finalize() {
     m_finalized = true;
+}
+
+void CContentUpdate::applyState() {
+    for (auto& activation : m_activations)
+        activation();
 }
 
 CContentUpdateQueue::CContentUpdateQueue(WP<CWLSurfaceResource> surface) : m_surface(std::move(surface)) {}
@@ -156,7 +166,8 @@ void CContentUpdateQueue::tryProcess() {
         if (!update->finalized() || !update->ready())
             return;
 
-        m_surface->commitState(*update);
+        m_surface->applyUpdate(*update);
+        m_surface->publishUpdate();
         m_queue.pop_front();
     }
 }

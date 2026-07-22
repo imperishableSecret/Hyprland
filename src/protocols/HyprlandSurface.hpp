@@ -20,13 +20,20 @@ class CHyprlandSurface {
   private:
     SP<CHyprlandSurfaceV1> m_resource;
     WP<CWLSurfaceResource> m_surface;
-    float                  m_opacity              = 1.0;
-    bool                   m_visibleRegionChanged = false;
-    CRegion                m_visibleRegion;
+    WP<CHyprlandSurface>   m_self;
+    float                  m_pendingOpacity = 1.F;
+    float                  m_currentOpacity = 1.F;
+    CRegion                m_pendingVisibleRegion;
+    CRegion                m_currentVisibleRegion;
+    bool                   m_pendingEnabled = false;
+    bool                   m_currentEnabled = false;
+    bool                   m_dirty          = false;
+    bool                   m_stateChanged   = false;
 
     void                   destroy();
 
     struct {
+        CHyprSignalListener contentUpdate;
         CHyprSignalListener surfaceCommitted;
         CHyprSignalListener surfaceDestroyed;
     } m_listeners;

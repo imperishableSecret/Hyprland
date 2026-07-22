@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <deque>
+#include <functional>
+#include <vector>
 
 class CWLSurfaceResource;
 
@@ -31,18 +33,23 @@ class CContentUpdate {
     WP<CWLSurfaceResource> surface() const;
     void                   addConstraint(eContentUpdateConstraint constraint);
     void                   clearConstraint(eContentUpdateConstraint constraint);
+    void                   addActivation(std::move_only_function<void()>&& activation);
     bool                   ready() const;
     bool                   finalized() const;
 
   private:
-    SSurfaceState            m_state;
-    WP<CWLSurfaceResource>   m_surface;
-    eContentUpdateConstraint m_constraints = eContentUpdateConstraint::NONE;
-    bool                     m_finalized   = false;
+    SSurfaceState                                m_state;
+    WP<CWLSurfaceResource>                       m_surface;
+    eContentUpdateConstraint                     m_constraints = eContentUpdateConstraint::NONE;
+    std::vector<std::move_only_function<void()>> m_activations;
+    bool                                         m_finalized = false;
 
-    void                     finalize();
+    void                                         finalize();
+    void                                         applyState();
 
     friend class CContentUpdateQueue;
+    friend class CContentUpdateTestAccess;
+    friend class CWLSurfaceResource;
 };
 
 class CContentUpdateQueue {

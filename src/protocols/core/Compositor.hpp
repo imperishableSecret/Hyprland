@@ -124,7 +124,8 @@ class CWLSurfaceResource {
     void                                   presentFeedback(const Time::steady_tp& when, PHLMONITOR pMonitor, bool discarded = false);
     void                                   scheduleUpdate(WP<CContentUpdate> update);
     void                                   drainSyncFds(WP<CContentUpdate> update);
-    void                                   commitState(CContentUpdate& update);
+    void                                   applyUpdate(CContentUpdate& update);
+    void                                   publishUpdate();
     NColorManagement::PImageDescription    getPreferredImageDescription();
     void                                   sortSubsurfaces();
     bool                                   hasVisibleSubsurface();

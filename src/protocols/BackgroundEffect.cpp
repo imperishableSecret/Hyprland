@@ -30,11 +30,33 @@ void CBackgroundEffect::setResource(SP<CExtBackgroundEffectSurfaceV1> resource) 
         }
 
         if (!region) {
-            m_blurRegion.clear();
+            m_pendingBlurRegion.clear();
+            m_dirty = true;
             return;
         }
 
-        m_blurRegion = CWLRegionResource::fromResource(region)->m_region;
+        m_pendingBlurRegion = CWLRegionResource::fromResource(region)->m_region;
+        m_dirty             = true;
+    });
+
+    m_pendingEnabled = true;
+    m_dirty          = true;
+
+    m_listeners.contentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (!m_dirty)
+            return;
+
+        const CRegion REGION  = m_pendingBlurRegion;
+        const bool    ENABLED = m_pendingEnabled;
+        update->addActivation([self = m_self, REGION, ENABLED] {
+            if (!self)
+                return;
+
+            self->m_currentBlurRegion = REGION;
+            self->m_currentEnabled    = ENABLED;
+            self->m_stateChanged      = true;
+        });
+        m_dirty = false;
     });
 
     m_listeners.surfaceCommitted = m_surface->m_events.commit.listen([this] {
@@ -43,23 +65,17 @@ void CBackgroundEffect::setResource(SP<CExtBackgroundEffectSurfaceV1> resource) 
         if (!hlSurface)
             return;
 
-        if (!m_resource) {
-            // effect was destroyed, clear state on commit per spec
-            hlSurface->m_hasBackgroundEffect = false;
-            hlSurface->m_blurRegion.clear();
-            auto box = hlSurface->getSurfaceBoxGlobal();
+        if (m_stateChanged) {
+            hlSurface->m_hasBackgroundEffect = m_currentEnabled;
+            hlSurface->m_blurRegion          = m_currentEnabled ? m_currentBlurRegion : CRegion{};
+            auto box                         = hlSurface->getSurfaceBoxGlobal();
             if (box.has_value())
                 g_pHyprRenderer->damageBox(*box);
-            PROTO::backgroundEffect->destroyEffect(this);
-            return;
+            m_stateChanged = false;
         }
 
-        hlSurface->m_hasBackgroundEffect = true;
-        hlSurface->m_blurRegion          = m_blurRegion;
-        auto box                         = hlSurface->getSurfaceBoxGlobal();
-
-        if (box.has_value())
-            g_pHyprRenderer->damageBox(*box);
+        if (!m_resource && !m_currentEnabled)
+            PROTO::backgroundEffect->destroyEffect(this);
     });
 
     m_listeners.surfaceDestroyed = m_surface->m_events.destroy.listen([this] {
@@ -70,7 +86,9 @@ void CBackgroundEffect::setResource(SP<CExtBackgroundEffectSurfaceV1> resource) 
 
 void CBackgroundEffect::destroy() {
     m_resource.reset();
-    m_blurRegion.clear();
+    m_pendingBlurRegion.clear();
+    m_pendingEnabled = false;
+    m_dirty          = true;
     // The spec requires effect removal to be double-buffered: state is cleared on next wl_surface commit.
     // If the surface is already destroyed, clean up immediately.
     if (!m_surface)
@@ -101,8 +119,8 @@ void CBackgroundEffectProtocol::destroyEffect(CBackgroundEffect* effect) {
 }
 
 void CBackgroundEffectProtocol::getBackgroundEffect(CExtBackgroundEffectManagerV1* manager, uint32_t id, SP<CWLSurfaceResource> surface) {
-    CBackgroundEffect* effect = nullptr;
-    auto               iter   = std::ranges::find_if(m_effects, [&](const auto& entry) { return entry.second->m_surface == surface; });
+    WP<CBackgroundEffect> effect;
+    auto                  iter = std::ranges::find_if(m_effects, [&](const auto& entry) { return entry.second->m_surface == surface; });
 
     if (iter != m_effects.end()) {
         if (iter->second->m_resource) {
@@ -111,20 +129,19 @@ void CBackgroundEffectProtocol::getBackgroundEffect(CExtBackgroundEffectManagerV
             return;
         } else {
             iter->second->setResource(makeShared<CExtBackgroundEffectSurfaceV1>(manager->client(), manager->version(), id));
-            effect = iter->second.get();
+            effect = WP<CBackgroundEffect>{iter->second};
         }
     } else {
-        effect = m_effects.emplace(surface, makeUnique<CBackgroundEffect>(makeShared<CExtBackgroundEffectSurfaceV1>(manager->client(), manager->version(), id), surface))
-                     .first->second.get();
+        const auto IT =
+            m_effects.emplace(surface, makeUnique<CBackgroundEffect>(makeShared<CExtBackgroundEffectSurfaceV1>(manager->client(), manager->version(), id), surface)).first;
+        effect = WP<CBackgroundEffect>{IT->second};
     }
+
+    effect->m_self = effect;
 
     if UNLIKELY (!effect->good()) {
         manager->noMemory();
         m_effects.erase(surface);
         return;
     }
-
-    auto hlSurface = Desktop::View::CWLSurface::fromResource(surface);
-    if (hlSurface)
-        hlSurface->m_hasBackgroundEffect = true;
 }

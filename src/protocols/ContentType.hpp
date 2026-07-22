@@ -12,12 +12,14 @@ class CContentTypeManager {
     bool good();
 
   private:
+    void                        onGetSurfaceContentType(CWpContentTypeManagerV1* resource, uint32_t id, wl_resource* surface);
+
     SP<CWpContentTypeManagerV1> m_resource;
 };
 
 class CContentType {
   public:
-    CContentType(SP<CWpContentTypeV1> resource);
+    CContentType(SP<CWpContentTypeV1> resource, SP<CWLSurfaceResource> surface);
     CContentType(WP<CWLSurfaceResource> surface);
 
     bool                       good();
@@ -27,12 +29,24 @@ class CContentType {
     WP<CContentType>           m_self;
 
   private:
-    SP<CWpContentTypeV1> m_resource;
-    wl_client*           m_client = nullptr;
+    SP<CWpContentTypeV1>       m_resource;
+    WP<CWLSurfaceResource>     m_surface;
+    wl_client*                 m_client       = nullptr;
+    NContentType::eContentType m_pendingValue = NContentType::CONTENT_TYPE_NONE;
+    bool                       m_dirty        = false;
+    bool                       m_internal     = false;
 
-    CHyprSignalListener  m_destroy;
+    void                       setResource(SP<CWpContentTypeV1> resource);
+    void                       destroy();
+
+    struct {
+        CHyprSignalListener contentUpdate;
+        CHyprSignalListener surfaceCommit;
+        CHyprSignalListener surfaceDestroy;
+    } m_listeners;
 
     friend class CContentTypeProtocol;
+    friend class CContentTypeManager;
 };
 
 class CContentTypeProtocol : public IWaylandProtocol {

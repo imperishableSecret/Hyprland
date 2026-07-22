@@ -35,36 +35,61 @@ void CHyprlandSurface::setResource(SP<CHyprlandSurfaceV1> resource) {
             return;
         }
 
-        m_opacity = fOpacity;
+        m_pendingOpacity = fOpacity;
+        m_dirty          = true;
     });
 
     m_resource->setSetVisibleRegion([this](CHyprlandSurfaceV1* resource, wl_resource* region) {
         if (!region) {
-            if (!m_visibleRegion.empty())
-                m_visibleRegionChanged = true;
-
-            m_visibleRegion.clear();
+            m_pendingVisibleRegion.clear();
+            m_dirty = true;
             return;
         }
 
-        m_visibleRegionChanged = true;
-        m_visibleRegion        = CWLRegionResource::fromResource(region)->m_region;
+        m_pendingVisibleRegion = CWLRegionResource::fromResource(region)->m_region;
+        m_dirty                = true;
+    });
+
+    m_pendingEnabled = true;
+    m_dirty          = true;
+
+    m_listeners.contentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (!m_dirty)
+            return;
+
+        const float   OPACITY = m_pendingOpacity;
+        const CRegion REGION  = m_pendingVisibleRegion;
+        const bool    ENABLED = m_pendingEnabled;
+        update->addActivation([self = m_self, OPACITY, REGION, ENABLED] {
+            if (!self)
+                return;
+
+            self->m_currentOpacity       = OPACITY;
+            self->m_currentVisibleRegion = REGION;
+            self->m_currentEnabled       = ENABLED;
+            self->m_stateChanged         = true;
+        });
+        m_dirty = false;
     });
 
     m_listeners.surfaceCommitted = m_surface->m_events.commit.listen([this] {
         auto surface = Desktop::View::CWLSurface::fromResource(m_surface.lock());
 
-        if (surface && (surface->m_overallOpacity != m_opacity || m_visibleRegionChanged)) {
-            surface->m_overallOpacity = m_opacity;
-            surface->m_visibleRegion  = m_visibleRegion;
+        if (!surface)
+            return;
+
+        if (m_stateChanged) {
+            surface->m_overallOpacity = m_currentEnabled ? m_currentOpacity : 1.F;
+            surface->m_visibleRegion  = m_currentEnabled ? m_currentVisibleRegion : CRegion{};
             auto box                  = surface->getSurfaceBoxGlobal();
 
             if (box.has_value())
                 g_pHyprRenderer->damageBox(*box);
-
-            if (!m_resource)
-                PROTO::hyprlandSurface->destroySurface(this);
+            m_stateChanged = false;
         }
+
+        if (!m_resource && !m_currentEnabled)
+            PROTO::hyprlandSurface->destroySurface(this);
     });
 
     m_listeners.surfaceDestroyed = m_surface->m_events.destroy.listen([this] {
@@ -75,12 +100,10 @@ void CHyprlandSurface::setResource(SP<CHyprlandSurfaceV1> resource) {
 
 void CHyprlandSurface::destroy() {
     m_resource.reset();
-    m_opacity = 1.F;
-
-    if (!m_visibleRegion.empty())
-        m_visibleRegionChanged = true;
-
-    m_visibleRegion.clear();
+    m_pendingOpacity = 1.F;
+    m_pendingVisibleRegion.clear();
+    m_pendingEnabled = false;
+    m_dirty          = true;
 
     if (!m_surface)
         PROTO::hyprlandSurface->destroySurface(this);
@@ -108,8 +131,8 @@ void CHyprlandSurfaceProtocol::destroySurface(CHyprlandSurface* surface) {
 }
 
 void CHyprlandSurfaceProtocol::getSurface(CHyprlandSurfaceManagerV1* manager, uint32_t id, SP<CWLSurfaceResource> surface) {
-    CHyprlandSurface* hyprlandSurface = nullptr;
-    auto              iter            = std::ranges::find_if(m_surfaces, [&](const auto& entry) { return entry.second->m_surface == surface; });
+    WP<CHyprlandSurface> hyprlandSurface;
+    auto                 iter = std::ranges::find_if(m_surfaces, [&](const auto& entry) { return entry.second->m_surface == surface; });
 
     if (iter != m_surfaces.end()) {
         if (iter->second->m_resource) {
@@ -118,12 +141,14 @@ void CHyprlandSurfaceProtocol::getSurface(CHyprlandSurfaceManagerV1* manager, ui
             return;
         } else {
             iter->second->setResource(makeShared<CHyprlandSurfaceV1>(manager->client(), manager->version(), id));
-            hyprlandSurface = iter->second.get();
+            hyprlandSurface = WP<CHyprlandSurface>{iter->second};
         }
     } else {
-        hyprlandSurface =
-            m_surfaces.emplace(surface, makeUnique<CHyprlandSurface>(makeShared<CHyprlandSurfaceV1>(manager->client(), manager->version(), id), surface)).first->second.get();
+        const auto IT   = m_surfaces.emplace(surface, makeUnique<CHyprlandSurface>(makeShared<CHyprlandSurfaceV1>(manager->client(), manager->version(), id), surface)).first;
+        hyprlandSurface = WP<CHyprlandSurface>{IT->second};
     }
+
+    hyprlandSurface->m_self = hyprlandSurface;
 
     if UNLIKELY (!hyprlandSurface->good()) {
         manager->noMemory();

@@ -85,33 +85,7 @@ CColorManager::CColorManager(SP<CWpColorManagerV1> resource) : m_resource(resour
 
         RESOURCE->m_self = RESOURCE;
     });
-    m_resource->setGetSurface([](CWpColorManagerV1* r, uint32_t id, wl_resource* surface) {
-        LOGM(Log::TRACE, "Get surface for id={}, surface={}", id, (uintptr_t)surface);
-        auto SURF = CWLSurfaceResource::fromResource(surface);
-
-        if (!SURF) {
-            LOGM(Log::ERR, "No surface for resource {}", (uintptr_t)surface);
-            r->error(-1, "Invalid surface (2)");
-            return;
-        }
-
-        if (SURF->m_colorManagement) {
-            r->error(WP_COLOR_MANAGER_V1_ERROR_SURFACE_EXISTS, "CM Surface already exists");
-            return;
-        }
-
-        const auto RESOURCE =
-            PROTO::colorManagement->m_surfaces.emplace_back(makeShared<CColorManagementSurface>(makeShared<CWpColorManagementSurfaceV1>(r->client(), r->version(), id), SURF));
-        if UNLIKELY (!RESOURCE->good()) {
-            r->noMemory();
-            PROTO::colorManagement->m_surfaces.pop_back();
-            return;
-        }
-
-        RESOURCE->m_self = RESOURCE;
-
-        SURF->m_colorManagement = RESOURCE;
-    });
+    m_resource->setGetSurface([this](CWpColorManagerV1* resource, uint32_t id, wl_resource* surface) { onGetSurface(resource, id, surface); });
     m_resource->setGetSurfaceFeedback([](CWpColorManagerV1* r, uint32_t id, wl_resource* surface) {
         LOGM(Log::TRACE, "Get feedback surface for id={}, surface={}", id, (uintptr_t)surface);
         auto SURF = CWLSurfaceResource::fromResource(surface);
@@ -233,6 +207,38 @@ CColorManager::CColorManager(SP<CWpColorManagerV1> resource) : m_resource(resour
     m_resource->sendDone();
 }
 
+void CColorManager::onGetSurface(CWpColorManagerV1* resource, uint32_t id, wl_resource* surface) {
+    LOGM(Log::TRACE, "Get surface for id={}, surface={}", id, (uintptr_t)surface);
+    auto SURFACE = CWLSurfaceResource::fromResource(surface);
+
+    if (!SURFACE) {
+        LOGM(Log::ERR, "No surface for resource {}", (uintptr_t)surface);
+        resource->error(-1, "Invalid surface (2)");
+        return;
+    }
+
+    auto COLOR_SURFACE = SURFACE->m_colorManagement.lock();
+    if (COLOR_SURFACE && COLOR_SURFACE->m_resource) {
+        resource->error(WP_COLOR_MANAGER_V1_ERROR_SURFACE_EXISTS, "CM Surface already exists");
+        return;
+    }
+
+    if (COLOR_SURFACE)
+        COLOR_SURFACE->setResource(makeShared<CWpColorManagementSurfaceV1>(resource->client(), resource->version(), id));
+    else
+        COLOR_SURFACE = PROTO::colorManagement->m_surfaces.emplace_back(
+            makeShared<CColorManagementSurface>(makeShared<CWpColorManagementSurfaceV1>(resource->client(), resource->version(), id), SURFACE));
+
+    if UNLIKELY (!COLOR_SURFACE->good()) {
+        resource->noMemory();
+        PROTO::colorManagement->destroyResource(COLOR_SURFACE.get());
+        return;
+    }
+
+    COLOR_SURFACE->m_self      = COLOR_SURFACE;
+    SURFACE->m_colorManagement = COLOR_SURFACE;
+}
+
 bool CColorManager::good() {
     return m_resource->resource();
 }
@@ -284,24 +290,54 @@ wl_client* CColorManagementOutput::client() {
     return m_client;
 }
 
-CColorManagementSurface::CColorManagementSurface(SP<CWpColorManagementSurfaceV1> resource, SP<CWLSurfaceResource> surface_) : m_surface(surface_), m_resource(resource) {
+CColorManagementSurface::CColorManagementSurface(SP<CWpColorManagementSurfaceV1> resource, SP<CWLSurfaceResource> surface_) : m_surface(surface_) {
+    m_imageDescription        = getDefaultImageDescription();
+    m_pendingImageDescription = m_imageDescription;
+    setResource(std::move(resource));
+
+    m_listeners.contentUpdate  = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (!m_dirty)
+            return;
+
+        const auto DESCRIPTION     = m_pendingImageDescription;
+        const bool HAS_DESCRIPTION = m_pendingHasImageDescription;
+        update->addActivation([self = m_self, DESCRIPTION, HAS_DESCRIPTION] {
+            if (!self)
+                return;
+
+            self->m_imageDescription = DESCRIPTION;
+            self->setHasImageDescription(HAS_DESCRIPTION);
+        });
+        m_dirty = false;
+    });
+    m_listeners.surfaceCommit  = m_surface->m_events.commit.listen([this] {
+        if (!m_resource && !m_hasImageDescription)
+            PROTO::colorManagement->destroyResource(this);
+    });
+    m_listeners.surfaceDestroy = m_surface->m_events.destroy.listen([this] {
+        m_surface.reset();
+        if (!m_resource)
+            PROTO::colorManagement->destroyResource(this);
+    });
+}
+
+void CColorManagementSurface::setResource(SP<CWpColorManagementSurfaceV1> resource) {
+    m_resource = std::move(resource);
     if UNLIKELY (!good())
         return;
 
-    m_client           = m_resource->client();
-    m_imageDescription = getDefaultImageDescription();
+    m_client = m_resource->client();
 
-    m_resource->setDestroy([this](CWpColorManagementSurfaceV1* r) {
-        LOGM(Log::TRACE, "Destroy wp cm surface {}", (uintptr_t)m_surface.get());
-        PROTO::colorManagement->destroyResource(this);
-    });
-    m_resource->setOnDestroy([this](CWpColorManagementSurfaceV1* r) {
-        LOGM(Log::TRACE, "Destroy wp cm surface {}", (uintptr_t)m_surface.get());
-        PROTO::colorManagement->destroyResource(this);
-    });
+    m_resource->setDestroy([this](CWpColorManagementSurfaceV1* r) { destroy(); });
+    m_resource->setOnDestroy([this](CWpColorManagementSurfaceV1* r) { destroy(); });
 
     m_resource->setSetImageDescription([this](CWpColorManagementSurfaceV1* r, wl_resource* image_description, uint32_t render_intent) {
         LOGM(Log::TRACE, "Set image description for surface={}, desc={}, intent={}", (uintptr_t)r, (uintptr_t)image_description, render_intent);
+
+        if (!m_surface) {
+            r->error(WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT, "Surface was destroyed");
+            return;
+        }
 
         const auto PO = sc<CWpImageDescriptionV1*>(wl_resource_get_user_data(image_description));
         if (!PO) { // FIXME check validity
@@ -320,14 +356,32 @@ CColorManagementSurface::CColorManagementSurface(SP<CWpColorManagementSurfaceV1>
             return;
         }
 
-        setHasImageDescription(true);
-        m_imageDescription = imageDescription->get()->m_settings;
+        m_pendingHasImageDescription = true;
+        m_pendingImageDescription    = imageDescription->get()->m_settings;
+        m_dirty                      = true;
     });
     m_resource->setUnsetImageDescription([this](CWpColorManagementSurfaceV1* r) {
         LOGM(Log::TRACE, "Unset image description for surface={}", (uintptr_t)r);
-        m_imageDescription = getDefaultImageDescription();
-        setHasImageDescription(false);
+        if (!m_surface) {
+            r->error(WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT, "Surface was destroyed");
+            return;
+        }
+
+        m_pendingImageDescription    = getDefaultImageDescription();
+        m_pendingHasImageDescription = false;
+        m_dirty                      = true;
     });
+}
+
+void CColorManagementSurface::destroy() {
+    LOGM(Log::TRACE, "Destroy wp cm surface {}", (uintptr_t)m_surface.get());
+    m_resource.reset();
+    m_pendingImageDescription    = getDefaultImageDescription();
+    m_pendingHasImageDescription = false;
+    m_dirty                      = true;
+
+    if (!m_surface)
+        PROTO::colorManagement->destroyResource(this);
 }
 
 bool CColorManagementSurface::good() {

@@ -19,11 +19,17 @@ class CAlphaModifier {
   private:
     UP<CWpAlphaModifierSurfaceV1> m_resource;
     WP<CWLSurfaceResource>        m_surface;
-    float                         m_alpha = 1.0;
+    WP<CAlphaModifier>            m_self;
+    float                         m_pendingAlpha   = 1.F;
+    float                         m_currentAlpha   = 1.F;
+    bool                          m_pendingEnabled = false;
+    bool                          m_currentEnabled = false;
+    bool                          m_dirty          = false;
 
     void                          destroy();
 
     struct {
+        CHyprSignalListener contentUpdate;
         CHyprSignalListener surfaceCommitted;
         CHyprSignalListener surfaceDestroyed;
     } m_listeners;

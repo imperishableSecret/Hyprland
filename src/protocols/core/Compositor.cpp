@@ -623,7 +623,7 @@ void CWLSurfaceResource::drainSyncFds(WP<CContentUpdate> update) {
     m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
 }
 
-void CWLSurfaceResource::commitState(CContentUpdate& update) {
+void CWLSurfaceResource::applyUpdate(CContentUpdate& update) {
     auto& state = update.state();
     // only a new buffer supersedes the current, not yet presented content.
     if (state.updated.bits.buffer)
@@ -648,6 +648,10 @@ void CWLSurfaceResource::commitState(CContentUpdate& update) {
     if (m_current.texture)
         m_current.texture->m_transform = Math::wlTransformToHyprutils(m_current.transform);
 
+    update.applyState();
+}
+
+void CWLSurfaceResource::publishUpdate() {
     if (m_role->role() == SURFACE_ROLE_SUBSURFACE) {
         auto subsurface = sc<CSubsurfaceRole*>(m_role.get())->m_subsurface.lock();
         if (subsurface->m_sync)

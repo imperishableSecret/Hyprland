@@ -20,11 +20,18 @@ class CBackgroundEffect {
   private:
     SP<CExtBackgroundEffectSurfaceV1> m_resource;
     WP<CWLSurfaceResource>            m_surface;
-    CRegion                           m_blurRegion;
+    WP<CBackgroundEffect>             m_self;
+    CRegion                           m_pendingBlurRegion;
+    CRegion                           m_currentBlurRegion;
+    bool                              m_pendingEnabled = false;
+    bool                              m_currentEnabled = false;
+    bool                              m_dirty          = false;
+    bool                              m_stateChanged   = false;
 
     void                              destroy();
 
     struct {
+        CHyprSignalListener contentUpdate;
         CHyprSignalListener surfaceCommitted;
         CHyprSignalListener surfaceDestroyed;
     } m_listeners;
