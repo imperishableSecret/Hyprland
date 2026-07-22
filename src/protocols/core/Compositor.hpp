@@ -157,10 +157,13 @@ class CWLSurfaceResource {
     SP<CWLSurfaceResource>             findFirstPreorderHelper(SP<CWLSurfaceResource> root, std::function<bool(SP<CWLSurfaceResource>)> fn);
     void                               updateCursorShm(CRegion damage = CBox{0, 0, INT16_MAX, INT16_MAX});
     void                               attachSynchronizedChildren(const WP<CContentUpdate>& update);
+    void                               prepareSubsurfaceState(CContentUpdate& update);
+    void                               publishSubsurfaceAdditions(std::vector<SP<CWLSurfaceResource>>& surfaces);
     void                               prepareFifoState(CContentUpdate& update);
     void                               activateFifoBarrier(uint64_t epoch);
     void                               scheduleFifoFrame();
 
+    friend class CWLCompositorProtocol;
     friend class CWLPointerResource;
 };
 

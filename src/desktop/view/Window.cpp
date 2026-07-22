@@ -1838,24 +1838,35 @@ SP<CWLSurfaceResource> CWindow::getSolitaryResource() {
     if (popupsCount())
         return nullptr;
 
-    if (res->m_subsurfaces.size() == 0)
-        return res;
+    SP<CWLSubsurfaceResource> subsurface;
+    size_t                    subsurfaceCount = 0;
+    for (const auto& subsurfaceRef : res->m_subsurfaces) {
+        const auto SUBSURFACE = subsurfaceRef.lock();
+        if (!SUBSURFACE || !SUBSURFACE->added())
+            continue;
 
-    if (res->m_subsurfaces.size() >= 1) {
-        if (!res->hasVisibleSubsurface())
-            return res;
-
-        if (res->m_subsurfaces.size() == 1) {
-            if (res->m_subsurfaces[0].expired() || res->m_subsurfaces[0]->m_surface.expired())
-                return nullptr;
-            auto surf = res->m_subsurfaces[0]->m_surface.lock();
-            if (!surf || surf->m_subsurfaces.size() != 0 || surf->extends() != res->extends() || !surf->m_current.texture || !surf->m_current.texture->m_opaque)
-                return nullptr;
-            return surf;
-        }
+        subsurface = SUBSURFACE;
+        ++subsurfaceCount;
     }
 
-    return nullptr;
+    if (subsurfaceCount == 0)
+        return res;
+
+    if (!res->hasVisibleSubsurface())
+        return res;
+
+    if (subsurfaceCount != 1 || !subsurface || subsurface->m_surface.expired())
+        return nullptr;
+
+    const auto SURFACE          = subsurface->m_surface.lock();
+    const bool HAS_ACTIVE_CHILD = SURFACE && std::ranges::any_of(SURFACE->m_subsurfaces, [](const auto& childRef) {
+                                      const auto CHILD = childRef.lock();
+                                      return CHILD && CHILD->added();
+                                  });
+    if (!SURFACE || HAS_ACTIVE_CHILD || SURFACE->extends() != res->extends() || !SURFACE->m_current.texture || !SURFACE->m_current.texture->m_opaque)
+        return nullptr;
+
+    return SURFACE;
 }
 
 Vector2D CWindow::getReportedSize() {

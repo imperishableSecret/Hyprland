@@ -298,7 +298,7 @@ Vector2D CSubsurface::coordsGlobal() const {
 
 void CSubsurface::initExistingSubsurfaces(SP<CWLSurfaceResource> pSurface) {
     for (auto const& s : pSurface->m_subsurfaces) {
-        if (!s || s->m_surface->m_hlSurface /* already assigned */)
+        if (!s || !s->announced() || s->m_surface->m_hlSurface /* already assigned */)
             continue;
         onNewSubsurface(s.lock());
     }

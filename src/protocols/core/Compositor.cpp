@@ -187,6 +187,7 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : m_resource(re
         auto       update = m_contentUpdates.enqueue(makeUnique<CContentUpdate>(m_pending, m_self, MODE));
         m_pending.reset();
         attachSynchronizedChildren(update);
+        prepareSubsurfaceState(*update);
         prepareFifoState(*update);
 
         m_events.contentUpdate.emit(update);
@@ -425,7 +426,7 @@ void CWLSurfaceResource::bfHelper(std::span<const SP<CWLSurfaceResource>> nodes,
         // subsurfaces is sorted lowest -> highest
         for (auto const& subsurfaceRef : n->m_subsurfaces) {
             const auto subsurface = subsurfaceRef.lock();
-            if (!subsurface)
+            if (!subsurface || !subsurface->added())
                 continue;
 
             if (subsurface->m_zIndex >= 0)
@@ -463,7 +464,7 @@ void CWLSurfaceResource::bfHelper(std::span<const SP<CWLSurfaceResource>> nodes,
 
         for (auto const& subsurfaceRef : n->m_subsurfaces) {
             const auto subsurface = subsurfaceRef.lock();
-            if (!subsurface)
+            if (!subsurface || !subsurface->added())
                 continue;
 
             if (subsurface->m_zIndex < 0)
@@ -497,7 +498,7 @@ SP<CWLSurfaceResource> CWLSurfaceResource::findFirstPreorderHelper(SP<CWLSurface
 
     for (auto const& subsurfaceRef : root->m_subsurfaces) {
         const auto subsurface = subsurfaceRef.lock();
-        if (!subsurface)
+        if (!subsurface || !subsurface->added())
             continue;
 
         const auto surface = subsurface->m_surface.lock();
@@ -684,6 +685,26 @@ void CWLSurfaceResource::publishUpdate() {
         dropCurrentBuffer();
 }
 
+void CWLSurfaceResource::publishSubsurfaceAdditions(std::vector<SP<CWLSurfaceResource>>& surfaces) {
+    std::vector<SP<CWLSubsurfaceResource>> additions;
+
+    for (const auto& subsurfaceRef : m_subsurfaces) {
+        const auto SUBSURFACE = subsurfaceRef.lock();
+        if (!SUBSURFACE || !SUBSURFACE->m_added || SUBSURFACE->m_announced)
+            continue;
+
+        SUBSURFACE->m_announced = true;
+        additions.emplace_back(SUBSURFACE);
+
+        const auto SURFACE = SUBSURFACE->m_surface.lock();
+        if (SURFACE && std::ranges::find(surfaces, SURFACE) == surfaces.end())
+            surfaces.emplace_back(SURFACE);
+    }
+
+    for (const auto& subsurface : additions)
+        m_events.newSubsurface.emit(subsurface);
+}
+
 bool CWLSurfaceResource::effectivelySynchronized() const {
     auto                                surface = m_self.lock();
     std::vector<SP<CWLSurfaceResource>> visited;
@@ -723,6 +744,45 @@ void CWLSurfaceResource::attachSynchronizedChildren(const WP<CContentUpdate>& up
     }
 }
 
+void CWLSurfaceResource::prepareSubsurfaceState(CContentUpdate& update) {
+    struct SSubsurfaceSnapshot {
+        WP<CWLSubsurfaceResource> subsurface;
+        Vector2D                  position;
+        int                       zIndex = 0;
+    };
+
+    std::vector<SSubsurfaceSnapshot> snapshots;
+    for (const auto& subsurfaceRef : m_subsurfaces) {
+        const auto SUBSURFACE = subsurfaceRef.lock();
+        if (!SUBSURFACE || !SUBSURFACE->m_pending.dirty)
+            continue;
+
+        snapshots.emplace_back(SUBSURFACE, SUBSURFACE->m_pending.position, SUBSURFACE->m_pending.zIndex);
+        SUBSURFACE->m_pending.dirty = false;
+    }
+
+    if (snapshots.empty())
+        return;
+
+    update.addActivation([surface = m_self, snapshots = std::move(snapshots)] {
+        bool changed = false;
+
+        for (const auto& snapshot : snapshots) {
+            const auto SUBSURFACE = snapshot.subsurface.lock();
+            if (!SUBSURFACE)
+                continue;
+
+            SUBSURFACE->m_position = snapshot.position;
+            SUBSURFACE->m_zIndex   = snapshot.zIndex;
+            SUBSURFACE->m_added    = true;
+            changed                = true;
+        }
+
+        if (changed && surface)
+            surface->sortSubsurfaces();
+    });
+}
+
 PImageDescription CWLSurfaceResource::getPreferredImageDescription() {
     static const auto PFORCE_HDR = CConfigValue<Config::INTEGER>("quirks:prefer_hdr");
     const auto        WINDOW     = m_hlSurface ? Desktop::View::CWindow::fromView(m_hlSurface->view()) : nullptr;
@@ -746,32 +806,17 @@ PImageDescription CWLSurfaceResource::getPreferredImageDescription() {
 
 void CWLSurfaceResource::sortSubsurfaces() {
     std::erase_if(m_subsurfaces, [](const auto& subsurface) { return !subsurface; });
-    std::ranges::sort(m_subsurfaces, [](const auto& a, const auto& b) { return a->m_zIndex < b->m_zIndex; });
+    std::ranges::stable_sort(m_subsurfaces, [](const auto& a, const auto& b) {
+        if (a->m_added != b->m_added)
+            return a->m_added;
 
-    // find the first non-negative index. We will preserve negativity: e.g. -2, -1, 1, 2
-    int firstNonNegative = -1;
-    for (size_t i = 0; i < m_subsurfaces.size(); ++i) {
-        if (m_subsurfaces.at(i)->m_zIndex >= 0) {
-            firstNonNegative = i;
-            break;
-        }
-    }
-
-    if (firstNonNegative == -1)
-        firstNonNegative = m_subsurfaces.size();
-
-    for (size_t i = firstNonNegative; i < m_subsurfaces.size(); ++i) {
-        m_subsurfaces.at(i)->m_zIndex = i - firstNonNegative;
-    }
-
-    for (int i = 0; i < firstNonNegative; ++i) {
-        m_subsurfaces.at(i)->m_zIndex = -firstNonNegative + i;
-    }
+        return a->m_added ? a->m_zIndex < b->m_zIndex : a->m_pending.zIndex < b->m_pending.zIndex;
+    });
 }
 
 bool CWLSurfaceResource::hasVisibleSubsurface() {
     for (auto const& subsurface : m_subsurfaces) {
-        if (!subsurface || !subsurface->m_surface)
+        if (!subsurface || !subsurface->m_added || !subsurface->m_surface)
             continue;
 
         const auto& surf = subsurface->m_surface;
@@ -1096,6 +1141,10 @@ bool CWLCompositorProtocol::applyContentUpdateGraph(const std::vector<WP<CConten
 
     for (const auto& surface : surfaces)
         surface->m_contentUpdates.registerCandidates();
+
+    std::ranges::stable_sort(surfaces, {}, subsurfaceDepth);
+    for (size_t i = 0; i < surfaces.size(); ++i)
+        surfaces[i]->publishSubsurfaceAdditions(surfaces);
 
     std::ranges::stable_sort(surfaces, {}, subsurfaceDepth);
     for (const auto& surface : surfaces)

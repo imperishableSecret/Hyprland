@@ -35,6 +35,8 @@ class CWLSubsurfaceResource {
 
     Vector2D                  posRelativeToParent();
     bool                      good();
+    bool                      added() const;
+    bool                      announced() const;
     SP<CWLSurfaceResource>    t1Parent();
 
     bool                      m_sync = true;
@@ -45,7 +47,7 @@ class CWLSubsurfaceResource {
 
     WP<CWLSubsurfaceResource> m_self;
 
-    int                       m_zIndex = 1; // by default, it's above
+    int                       m_zIndex = 0;
 
     struct {
         CSignalT<> destroy;
@@ -54,12 +56,24 @@ class CWLSubsurfaceResource {
   private:
     SP<CWlSubsurface> m_resource;
 
-    void              destroy();
-    void              unlinkFromParent();
+    struct {
+        Vector2D position;
+        int      zIndex = 0;
+        bool     dirty  = true;
+    } m_pending;
+
+    bool m_added     = false;
+    bool m_announced = false;
+
+    void destroy();
+    void unlinkFromParent();
+    bool placeRelativeTo(const SP<CWLSurfaceResource>& reference, bool above);
 
     struct {
         CHyprSignalListener commitSurface;
     } m_listeners;
+
+    friend class CWLSurfaceResource;
 };
 
 class CWLSubcompositorResource {
