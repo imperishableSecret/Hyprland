@@ -17,6 +17,20 @@ static void collectSubsurfaceTree(const SP<CWLSurfaceResource>& surface, std::ve
     }
 }
 
+static void processSynchronizationChange(const std::vector<SP<CWLSurfaceResource>>& surfaces) {
+    bool converted = false;
+    for (const auto& surface : surfaces) {
+        if (surface->effectivelySynchronized())
+            continue;
+
+        surface->m_contentUpdates.convertUnreachableSynchronizedUpdates();
+        converted = true;
+    }
+
+    if (converted && !surfaces.empty())
+        surfaces.front()->m_contentUpdates.tryProcess();
+}
+
 CWLSubsurfaceResource::CWLSubsurfaceResource(SP<CWlSubsurface> resource_, SP<CWLSurfaceResource> surface_, SP<CWLSurfaceResource> parent_) :
     m_surface(surface_), m_parent(parent_), m_resource(resource_) {
     if UNLIKELY (!good())
@@ -48,17 +62,7 @@ CWLSubsurfaceResource::CWLSubsurfaceResource(SP<CWlSubsurface> resource_, SP<CWL
         collectSubsurfaceTree(m_surface.lock(), surfaces);
         m_sync = false;
 
-        bool converted = false;
-        for (const auto& surface : surfaces) {
-            if (surface->effectivelySynchronized())
-                continue;
-
-            surface->m_contentUpdates.convertUnreachableSynchronizedUpdates();
-            converted = true;
-        }
-
-        if (converted && !surfaces.empty())
-            surfaces.front()->m_contentUpdates.tryProcess();
+        processSynchronizationChange(surfaces);
     });
     m_resource->setSetSync([this](CWlSubsurface* r) { m_sync = true; });
 
@@ -73,18 +77,24 @@ CWLSubsurfaceResource::CWLSubsurfaceResource(SP<CWlSubsurface> resource_, SP<CWL
     });
 
     m_listeners.commitSurface = m_surface->m_events.commit.listen([this] {
-        if (m_surface->m_current.texture && !m_surface->m_mapped) {
-            m_surface->map();
-            m_surface->m_events.map.emit();
+        const auto SURFACE = m_surface.lock();
+        if (!SURFACE || !m_parent)
+            return;
+
+        if (SURFACE->m_current.texture && !SURFACE->m_mapped) {
+            SURFACE->map();
+            SURFACE->m_events.map.emit();
             return;
         }
 
-        if (!m_surface->m_current.texture && m_surface->m_mapped) {
-            m_surface->m_events.unmap.emit();
-            m_surface->unmap();
+        if (!SURFACE->m_current.texture && SURFACE->m_mapped) {
+            SURFACE->m_events.unmap.emit();
+            SURFACE->unmap();
             return;
         }
     });
+
+    m_listeners.parentDestroy = m_parent->m_events.destroy.listen([this] { handleParentDestroy(); });
 }
 
 CWLSubsurfaceResource::~CWLSubsurfaceResource() {
@@ -95,14 +105,47 @@ CWLSubsurfaceResource::~CWLSubsurfaceResource() {
 }
 
 void CWLSubsurfaceResource::destroy() {
-    unlinkFromParent();
+    const auto                          SURFACE = m_surface.lock();
+    std::vector<SP<CWLSurfaceResource>> surfaces;
+    collectSubsurfaceTree(SURFACE, surfaces);
 
-    if (m_surface && m_surface->m_mapped) {
-        m_surface->m_events.unmap.emit();
-        m_surface->unmap();
+    m_listeners.commitSurface.reset();
+    m_listeners.parentDestroy.reset();
+    unlinkFromParent();
+    m_parent.reset();
+
+    if (SURFACE) {
+        SURFACE->resetRole();
+        SURFACE->m_contentUpdates.releaseSynchronizedUpdates();
+    }
+
+    processSynchronizationChange(surfaces);
+
+    if (SURFACE && SURFACE->m_mapped) {
+        SURFACE->m_events.unmap.emit();
+        SURFACE->unmap();
     }
     m_events.destroy.emit();
     PROTO::subcompositor->destroyResource(this);
+}
+
+void CWLSubsurfaceResource::handleParentDestroy() {
+    const auto SURFACE = m_surface.lock();
+    if (!SURFACE || !m_parent)
+        return;
+
+    std::vector<SP<CWLSurfaceResource>> surfaces;
+    collectSubsurfaceTree(SURFACE, surfaces);
+
+    unlinkFromParent();
+    m_parent.reset();
+
+    if (SURFACE->m_mapped) {
+        SURFACE->m_events.unmap.emit();
+        SURFACE->unmap();
+    }
+
+    processSynchronizationChange(surfaces);
 }
 
 void CWLSubsurfaceResource::unlinkFromParent() {

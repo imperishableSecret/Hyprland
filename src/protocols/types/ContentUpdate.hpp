@@ -81,6 +81,7 @@ class CContentUpdateQueue {
     void               clearFifoEpoch(uint64_t epoch);
     uint64_t           latestFifoBarrierEpoch() const;
     void               claimNewestSynchronized(const WP<CContentUpdate>& dependent);
+    void               releaseSynchronizedUpdates();
     void               convertUnreachableSynchronizedUpdates();
     void               finalize(const WP<CContentUpdate>& update);
     void               tryProcess();
@@ -92,6 +93,7 @@ class CContentUpdateQueue {
     typename std::deque<UP<CContentUpdate>>::iterator       find(const WP<CContentUpdate>& update);
     typename std::deque<UP<CContentUpdate>>::const_iterator find(const WP<CContentUpdate>& update) const;
     WP<CContentUpdate>                                      newestUnclaimedSynchronized() const;
+    void                                                    convertToDesynchronized(const WP<CContentUpdate>& update);
     bool                                                    isCandidate(const WP<CContentUpdate>& update) const;
     bool                                                    reachableFromDesynchronized(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& visiting) const;
     void                                                    removeApplied();

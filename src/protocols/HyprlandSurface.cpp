@@ -75,10 +75,7 @@ void CHyprlandSurface::setResource(SP<CHyprlandSurfaceV1> resource) {
     m_listeners.surfaceCommitted = m_surface->m_events.commit.listen([this] {
         auto surface = Desktop::View::CWLSurface::fromResource(m_surface.lock());
 
-        if (!surface)
-            return;
-
-        if (m_stateChanged) {
+        if (surface && m_stateChanged) {
             surface->m_overallOpacity = m_currentEnabled ? m_currentOpacity : 1.F;
             surface->m_visibleRegion  = m_currentEnabled ? m_currentVisibleRegion : CRegion{};
             auto box                  = surface->getSurfaceBoxGlobal();

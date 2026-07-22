@@ -101,13 +101,8 @@ struct SSurfaceState {
     SP<CEventLoopTimer>             timer;
 
     // helpers
-    CRegion accumulateBufferDamage();       // transforms state.damage and merges it into state.bufferDamage
-    CRegion effectiveInputRegion() const;   // materializes the input region clipped to the current surface size
-    void    updateFrom(SSurfaceState& ref); // updates this state based on a reference state.
-    void    reset();                        // resets pending state after commit
-
-    bool    isLocked() const;
-    bool    fenceSignaled() const;
-    void    mergeFrom(SSurfaceState& ref);
-    void    cancelFenceWaiter();
+    CRegion accumulateBufferDamage();                              // transforms state.damage and merges it into state.bufferDamage
+    CRegion effectiveInputRegion() const;                          // materializes the input region clipped to the current surface size
+    void    updateFrom(SSurfaceState& ref, bool accumulateDamage); // updates this state based on a reference state.
+    void    reset();                                               // resets pending state after commit
 };

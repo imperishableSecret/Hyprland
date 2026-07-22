@@ -66,11 +66,13 @@ class CWLSubsurfaceResource {
     bool m_announced = false;
 
     void destroy();
+    void handleParentDestroy();
     void unlinkFromParent();
     bool placeRelativeTo(const SP<CWLSurfaceResource>& reference, bool above);
 
     struct {
         CHyprSignalListener commitSurface;
+        CHyprSignalListener parentDestroy;
     } m_listeners;
 
     friend class CWLSurfaceResource;

@@ -94,8 +94,10 @@ void CContentUpdate::removeDependency(const WP<CContentUpdate>& dependency) {
 CContentUpdateQueue::CContentUpdateQueue(WP<CWLSurfaceResource> surface) : m_surface(std::move(surface)) {}
 
 void CContentUpdateQueue::clear() {
-    for (const auto& update : m_queue)
-        PROTO::presentation->discardFeedbacks(update->state().presentationFeedbacks);
+    if (PROTO::presentation) {
+        for (const auto& update : m_queue)
+            PROTO::presentation->discardFeedbacks(update->state().presentationFeedbacks);
+    }
 
     m_queue.clear();
 }
@@ -180,6 +182,13 @@ void CContentUpdateQueue::claimNewestSynchronized(const WP<CContentUpdate>& depe
     DEPENDENCY->m_claimedBy = dependent;
 }
 
+void CContentUpdateQueue::releaseSynchronizedUpdates() {
+    for (const auto& update : m_queue)
+        convertToDesynchronized(WP<CContentUpdate>{update});
+
+    registerCandidates();
+}
+
 void CContentUpdateQueue::convertUnreachableSynchronizedUpdates() {
     std::vector<bool> reachable;
     reachable.reserve(m_queue.size());
@@ -194,12 +203,7 @@ void CContentUpdateQueue::convertUnreachableSynchronizedUpdates() {
         if (update->m_mode != eContentUpdateMode::SYNCHRONIZED || reachable[i])
             continue;
 
-        const WP<CContentUpdate> UPDATE{update};
-        if (update->m_claimedBy)
-            update->m_claimedBy->removeDependency(UPDATE);
-
-        update->m_claimedBy.reset();
-        update->m_mode = eContentUpdateMode::DESYNCHRONIZED;
+        convertToDesynchronized(WP<CContentUpdate>{update});
     }
 
     registerCandidates();
@@ -226,6 +230,17 @@ auto CContentUpdateQueue::find(const WP<CContentUpdate>& update) const -> std::d
         return m_queue.end();
 
     return std::ranges::find_if(m_queue, [&update](const auto& queued) { return queued.get() == update.get(); });
+}
+
+void CContentUpdateQueue::convertToDesynchronized(const WP<CContentUpdate>& update) {
+    if (!update || update->m_mode != eContentUpdateMode::SYNCHRONIZED)
+        return;
+
+    if (update->m_claimedBy)
+        update->m_claimedBy->removeDependency(update);
+
+    update->m_claimedBy.reset();
+    update->m_mode = eContentUpdateMode::DESYNCHRONIZED;
 }
 
 bool CContentUpdateQueue::isCandidate(const WP<CContentUpdate>& update) const {
@@ -274,6 +289,9 @@ void CContentUpdateQueue::removeApplied() {
 }
 
 void CContentUpdateQueue::registerCandidates() {
+    if (!PROTO::compositor)
+        return;
+
     for (const auto& update : m_queue) {
         if (update->m_mode == eContentUpdateMode::SYNCHRONIZED)
             break;

@@ -300,6 +300,7 @@ void CWLSurfaceResource::discardPresentationFeedbacks() {
 }
 
 void CWLSurfaceResource::destroy() {
+    m_contentUpdates.clear();
     discardPresentationFeedbacks();
 
     if (m_mapped) {
@@ -648,14 +649,14 @@ void CWLSurfaceResource::drainSyncFds(WP<CContentUpdate> update) {
     m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
 }
 
-void CWLSurfaceResource::applyUpdate(CContentUpdate& update) {
+void CWLSurfaceResource::applyUpdate(CContentUpdate& update, bool accumulateDamage) {
     auto& state = update.state();
     // only a new buffer supersedes the current, not yet presented content.
     if (state.updated.bits.buffer)
         PROTO::presentation->discardFeedbacks(m_current.presentationFeedbacks);
 
     auto lastTexture = m_current.texture;
-    m_current.updateFrom(state);
+    m_current.updateFrom(state, accumulateDamage);
 
     if (state.fifoBarrierEpoch != 0)
         activateFifoBarrier(state.fifoBarrierEpoch);
@@ -1122,13 +1123,19 @@ bool CWLCompositorProtocol::applyContentUpdateGraph(const std::vector<WP<CConten
             surfaces.emplace_back(SURFACE);
     }
 
+    std::vector<SP<CWLSurfaceResource>> appliedSurfaces;
+    appliedSurfaces.reserve(surfaces.size());
+
     for (const auto& update : graph) {
         if (!update || update->m_applied)
             continue;
 
         const auto SURFACE = update->m_surface.lock();
         ASSERT(SURFACE);
-        SURFACE->applyUpdate(*update);
+        const bool ACCUMULATE_DAMAGE = std::ranges::find(appliedSurfaces, SURFACE) != appliedSurfaces.end();
+        SURFACE->applyUpdate(*update, ACCUMULATE_DAMAGE);
+        if (!ACCUMULATE_DAMAGE)
+            appliedSurfaces.emplace_back(SURFACE);
         update->m_applied = true;
     }
 
@@ -1210,6 +1217,7 @@ void CWLCompositorProtocol::destroyResource(CWLCompositorResource* resource) {
 
 void CWLCompositorProtocol::destroyResource(CWLSurfaceResource* resource) {
     std::erase_if(m_surfaces, [&](const auto& other) { return other.get() == resource; });
+    processContentUpdates();
 }
 
 void CWLCompositorProtocol::destroyResource(CWLRegionResource* resource) {

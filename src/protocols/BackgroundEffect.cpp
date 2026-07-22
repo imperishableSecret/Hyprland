@@ -62,10 +62,7 @@ void CBackgroundEffect::setResource(SP<CExtBackgroundEffectSurfaceV1> resource) 
     m_listeners.surfaceCommitted = m_surface->m_events.commit.listen([this] {
         auto hlSurface = Desktop::View::CWLSurface::fromResource(m_surface.lock());
 
-        if (!hlSurface)
-            return;
-
-        if (m_stateChanged) {
+        if (hlSurface && m_stateChanged) {
             hlSurface->m_hasBackgroundEffect = m_currentEnabled;
             hlSurface->m_blurRegion          = m_currentEnabled ? m_currentBlurRegion : CRegion{};
             auto box                         = hlSurface->getSurfaceBoxGlobal();

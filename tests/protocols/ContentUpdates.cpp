@@ -1,6 +1,7 @@
 #include <protocols/types/ContentUpdate.hpp>
 
 #include <gtest/gtest.h>
+#include <memory>
 
 class CContentUpdateTestAccess {
   public:
@@ -103,4 +104,53 @@ TEST(ContentUpdates, synchronizedUpdateReachabilityFollowsSameSurfaceOrder) {
     queue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}, eContentUpdateMode::DESYNCHRONIZED));
 
     EXPECT_TRUE(CContentUpdateTestAccess::reachableFromDesynchronized(queue, SYNC));
+}
+
+TEST(ContentUpdates, clearingQueueReleasesOwnedUpdateState) {
+    SSurfaceState       state;
+    CContentUpdateQueue queue;
+    auto                owned  = std::make_shared<int>(1);
+    std::weak_ptr<int>  weak   = owned;
+    const auto          UPDATE = queue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}));
+
+    UPDATE->addActivation([owned = std::move(owned)] {});
+    queue.clear();
+
+    EXPECT_TRUE(weak.expired());
+    EXPECT_FALSE(UPDATE);
+}
+
+TEST(ContentUpdates, releasingSynchronizedUpdatesUnblocksLaterDesynchronizedUpdates) {
+    SSurfaceState       state;
+    CContentUpdateQueue childQueue;
+    CContentUpdateQueue parentQueue;
+    const auto          PARENT = parentQueue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}, eContentUpdateMode::DESYNCHRONIZED));
+    const auto          CHILD  = childQueue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}, eContentUpdateMode::SYNCHRONIZED));
+
+    childQueue.claimNewestSynchronized(PARENT);
+    const auto LATER = childQueue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}, eContentUpdateMode::DESYNCHRONIZED));
+    EXPECT_FALSE(CContentUpdateTestAccess::isCandidate(childQueue, LATER));
+
+    childQueue.releaseSynchronizedUpdates();
+
+    EXPECT_EQ(CHILD->mode(), eContentUpdateMode::DESYNCHRONIZED);
+    EXPECT_FALSE(CContentUpdateTestAccess::claimedBy(*CHILD));
+    EXPECT_EQ(CContentUpdateTestAccess::dependencyCount(*PARENT), 0U);
+    EXPECT_TRUE(CContentUpdateTestAccess::isCandidate(childQueue, LATER));
+}
+
+TEST(ContentUpdates, unpublishedDamageAccumulatesAcrossUpdates) {
+    SSurfaceState current;
+    current.bufferSize   = {100, 100};
+    current.bufferDamage = CBox{0, 0, 10, 10};
+
+    SSurfaceState next;
+    next.updated.bits.damage = true;
+    next.bufferDamage        = CBox{20, 20, 10, 10};
+
+    current.updateFrom(next, true);
+    const auto DAMAGE = current.accumulateBufferDamage();
+
+    EXPECT_TRUE(DAMAGE.containsPoint({5, 5}));
+    EXPECT_TRUE(DAMAGE.containsPoint({25, 25}));
 }
