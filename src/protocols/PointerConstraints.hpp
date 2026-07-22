@@ -34,23 +34,34 @@ class CPointerConstraint {
     SP<CZwpLockedPointerV1>         m_resourceLocked;
     SP<CZwpConfinedPointerV1>       m_resourceConfined;
 
+    WP<CWLSurfaceResource>          m_surface;
     WP<Desktop::View::CWLSurface>   m_hlSurface;
+    WP<CPointerConstraint>          m_self;
 
     CRegion                         m_region;
+    CRegion                         m_pendingRegion;
     bool                            m_hintSet             = false;
+    bool                            m_pendingHintSet      = false;
     Vector2D                        m_positionHint        = {-1, -1};
+    Vector2D                        m_pendingPositionHint = {-1, -1};
     Vector2D                        m_cursorPosOnActivate = {-1, -1};
     bool                            m_active              = false;
     bool                            m_locked              = false;
     bool                            m_dead                = false;
+    bool                            m_dirty               = false;
+    bool                            m_stateChanged        = false;
     zwpPointerConstraintsV1Lifetime m_lifetime            = ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT;
 
     void                            sharedConstructions();
     void                            onSetRegion(wl_resource* region);
 
     struct {
+        CHyprSignalListener contentUpdate;
+        CHyprSignalListener surfaceCommit;
         CHyprSignalListener destroySurface;
     } m_listeners;
+
+    friend class CPointerConstraintsProtocol;
 };
 
 class CPointerConstraintsProtocol : public IWaylandProtocol {

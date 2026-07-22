@@ -67,17 +67,19 @@ class CLayerShellResource {
         void reset();
     } m_current, m_pending;
 
-    Vector2D               m_size;
-    std::string            m_layerNamespace;
-    std::string            m_monitor = "";
-    WP<CWLSurfaceResource> m_surface;
-    bool                   m_mapped     = false;
-    bool                   m_configured = false;
+    Vector2D                m_size;
+    std::string             m_layerNamespace;
+    std::string             m_monitor = "";
+    WP<CWLSurfaceResource>  m_surface;
+    WP<CLayerShellResource> m_self;
+    bool                    m_mapped     = false;
+    bool                    m_configured = false;
 
   private:
     SP<CZwlrLayerSurfaceV1> m_resource;
 
     struct {
+        CHyprSignalListener contentUpdate;
         CHyprSignalListener commitSurface;
         CHyprSignalListener destroySurface;
         CHyprSignalListener unmapSurface;

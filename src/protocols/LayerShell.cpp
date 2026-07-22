@@ -22,6 +22,7 @@ CLayerShellResource::CLayerShellResource(SP<CZwlrLayerSurfaceV1> resource_, SP<C
         return;
 
     m_current.layer = layer;
+    m_pending.layer = layer;
     m_monitor       = pMonitor ? pMonitor->m_name : "";
 
     m_resource->setDestroy([this](CZwlrLayerSurfaceV1* r) {
@@ -40,14 +41,28 @@ CLayerShellResource::CLayerShellResource(SP<CZwlrLayerSurfaceV1> resource_, SP<C
 
     m_listeners.unmapSurface = surf_->m_events.unmap.listen([this] { m_events.unmap.emit(); });
 
-    m_listeners.commitSurface = surf_->m_events.commit.listen([this] {
-        m_current           = m_pending;
-        m_pending.committed = 0;
+    m_listeners.contentUpdate = surf_->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (m_pending.committed == 0)
+            return;
 
+        const SState STATE  = m_pending;
+        m_pending.committed = 0;
+        update->addActivation([self = m_self, STATE] {
+            if (!self)
+                return;
+
+            const uint32_t COMMITTED  = self->m_current.committed | STATE.committed;
+            self->m_current           = STATE;
+            self->m_current.committed = COMMITTED;
+        });
+    });
+
+    m_listeners.commitSurface = surf_->m_events.commit.listen([this] {
         bool attachedBuffer = !!m_surface->m_current.texture;
 
         if (attachedBuffer && !m_configured) {
             m_surface->error(-1, "layerSurface was not configured, but a buffer was attached");
+            m_current.committed = 0;
             return;
         }
 
@@ -56,11 +71,13 @@ CLayerShellResource::CLayerShellResource(SP<CZwlrLayerSurfaceV1> resource_, SP<C
 
         if (m_current.desiredSize.x <= 0 && (m_current.anchor & horiz) != horiz) {
             m_surface->error(-1, "x == 0 but anchor doesn't have left and right");
+            m_current.committed = 0;
             return;
         }
 
         if (m_current.desiredSize.y <= 0 && (m_current.anchor & vert) != vert) {
             m_surface->error(-1, "y == 0 but anchor doesn't have top and bottom");
+            m_current.committed = 0;
             return;
         }
 
@@ -68,6 +85,7 @@ CLayerShellResource::CLayerShellResource(SP<CZwlrLayerSurfaceV1> resource_, SP<C
             m_mapped = true;
             m_surface->map();
             m_events.map.emit();
+            m_current.committed = 0;
             return;
         }
 
@@ -75,11 +93,13 @@ CLayerShellResource::CLayerShellResource(SP<CZwlrLayerSurfaceV1> resource_, SP<C
             m_mapped = false;
             m_events.unmap.emit();
             m_surface->unmap();
-            m_configured = false;
+            m_configured        = false;
+            m_current.committed = 0;
             return;
         }
 
         m_events.commit.emit();
+        m_current.committed = 0;
     });
 
     m_resource->setSetSize([this](CZwlrLayerSurfaceV1* r, uint32_t x, uint32_t y) {
@@ -257,7 +277,8 @@ void CLayerShellProtocol::onGetLayerSurface(CZwlrLayerShellV1* pMgr, uint32_t id
         return;
     }
 
-    SURF->m_role = makeShared<CLayerShellRole>(RESOURCE);
+    RESOURCE->m_self = RESOURCE;
+    SURF->m_role     = makeShared<CLayerShellRole>(RESOURCE);
     Desktop::View::CLayerSurface::create(RESOURCE);
 
     if (PMONITOR) {

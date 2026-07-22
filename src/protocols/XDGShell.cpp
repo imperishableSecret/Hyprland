@@ -238,12 +238,12 @@ CXDGToplevelResource::CXDGToplevelResource(SP<CXdgToplevel> resource_, SP<CXDGSu
 
     m_resource->setSetMaxSize([this](CXdgToplevel* r, int32_t x, int32_t y) {
         m_pending.maxSize = {x, y};
-        m_events.sizeLimitsChanged.emit();
+        m_sizeLimitsDirty = true;
     });
 
     m_resource->setSetMinSize([this](CXdgToplevel* r, int32_t x, int32_t y) {
         m_pending.minSize = {x, y};
-        m_events.sizeLimitsChanged.emit();
+        m_sizeLimitsDirty = true;
     });
 
     m_resource->setSetMaximized([this](CXdgToplevel* r) {
@@ -505,6 +505,7 @@ CXDGSurfaceResource::CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBas
     m_listeners.surfaceDestroy = m_surface->m_events.destroy.listen([this] {
         LOGM(Log::WARN, "wl_surface destroyed before its xdg_surface role object");
         m_listeners.surfaceDestroy.reset();
+        m_listeners.contentUpdate.reset();
         m_listeners.surfaceCommit.reset();
 
         if (m_mapped)
@@ -515,14 +516,41 @@ CXDGSurfaceResource::CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBas
         m_events.destroy.emit();
     });
 
-    m_listeners.surfaceCommit = m_surface->m_events.commit.listen([this] {
-        m_current = m_pending;
-        if (m_toplevel)
-            m_toplevel->m_current = m_toplevel->m_pending;
+    m_listeners.contentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (m_geometryDirty) {
+            const CBox GEOMETRY = m_pending.geometry;
+            update->addActivation([self = m_self, GEOMETRY] {
+                if (self)
+                    self->m_current.geometry = GEOMETRY;
+            });
+            m_geometryDirty = false;
+        }
 
-        if UNLIKELY (m_initialCommit && m_surface->m_pending.buffer) {
+        const auto TOPLEVEL = m_toplevel.lock();
+        if (!TOPLEVEL || !TOPLEVEL->m_sizeLimitsDirty)
+            return;
+
+        const auto LIMITS = TOPLEVEL->m_pending;
+        update->addActivation([toplevel = WP<CXDGToplevelResource>{TOPLEVEL}, LIMITS] {
+            if (!toplevel)
+                return;
+
+            toplevel->m_current           = LIMITS;
+            toplevel->m_sizeLimitsChanged = true;
+        });
+        TOPLEVEL->m_sizeLimitsDirty = false;
+    });
+
+    m_listeners.surfaceCommit = m_surface->m_events.commit.listen([this] {
+        if UNLIKELY (m_initialCommit && m_surface->m_current.buffer) {
             m_resource->error(-1, "Buffer attached before initial commit");
             return;
+        }
+
+        const auto TOPLEVEL = m_toplevel.lock();
+        if (TOPLEVEL && TOPLEVEL->m_sizeLimitsChanged) {
+            TOPLEVEL->m_sizeLimitsChanged = false;
+            TOPLEVEL->m_events.sizeLimitsChanged.emit();
         }
 
         if (m_surface->m_current.texture && !m_mapped) {
@@ -608,6 +636,7 @@ CXDGSurfaceResource::CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBas
     m_resource->setSetWindowGeometry([this](CXdgSurface* r, int32_t x, int32_t y, int32_t w, int32_t h) {
         LOGM(Log::DEBUG, "xdg_surface {:x} requests geometry {}x{} {}x{}", (uintptr_t)this, x, y, w, h);
         m_pending.geometry = {x, y, w, h};
+        m_geometryDirty    = true;
     });
 }
 

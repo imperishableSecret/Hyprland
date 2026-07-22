@@ -6,24 +6,74 @@ CXWaylandSurfaceResource::CXWaylandSurfaceResource(SP<CXwaylandSurfaceV1> resour
     if UNLIKELY (!good())
         return;
 
-    m_resource->setDestroy([this](CXwaylandSurfaceV1* r) {
-        events.destroy.emit();
-        PROTO::xwaylandShell->destroyResource(this);
-    });
-    m_resource->setOnDestroy([this](CXwaylandSurfaceV1* r) {
-        events.destroy.emit();
-        PROTO::xwaylandShell->destroyResource(this);
-    });
+    m_resource->setDestroy([this](CXwaylandSurfaceV1* r) { destroy(); });
+    m_resource->setOnDestroy([this](CXwaylandSurfaceV1* r) { destroy(); });
 
     m_client = m_resource->client();
 
     m_resource->setSetSerial([this](CXwaylandSurfaceV1* r, uint32_t lo, uint32_t hi) {
-        m_serial = (sc<uint64_t>(hi) << 32) + lo;
+        const uint64_t SERIAL = (sc<uint64_t>(hi) << 32) + lo;
+        if (SERIAL == 0) {
+            r->error(XWAYLAND_SURFACE_V1_ERROR_INVALID_SERIAL, "Serial must be non-zero");
+            return;
+        }
+
+        m_pendingSerial = SERIAL;
+        m_serialDirty   = true;
+    });
+
+    m_listeners.contentUpdate  = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (!m_serialDirty)
+            return;
+
+        if (m_associationCaptured) {
+            m_resource->error(XWAYLAND_SURFACE_V1_ERROR_ALREADY_ASSOCIATED, "Surface association was already committed");
+            update->state().rejected = true;
+            m_serialDirty            = false;
+            return;
+        }
+
+        const uint64_t SERIAL = m_pendingSerial;
+        update->addActivation([self = m_self, SERIAL] {
+            if (!self)
+                return;
+
+            self->m_serial       = SERIAL;
+            self->m_stateChanged = true;
+        });
+        m_serialDirty         = false;
+        m_associationCaptured = true;
+    });
+    m_listeners.surfaceCommit  = m_surface->m_events.commit.listen([this] {
+        if (!m_stateChanged)
+            return;
+
+        m_stateChanged = false;
         PROTO::xwaylandShell->m_events.newSurface.emit(m_self.lock());
+    });
+    m_listeners.surfaceDestroy = m_surface->m_events.destroy.listen([this] {
+        notifyDestroy();
+        m_surface.reset();
+        if (!m_resource)
+            PROTO::xwaylandShell->destroyResource(this);
     });
 }
 
 CXWaylandSurfaceResource::~CXWaylandSurfaceResource() {
+    notifyDestroy();
+}
+
+void CXWaylandSurfaceResource::destroy() {
+    m_resource.reset();
+    if (!m_surface || !m_associationCaptured)
+        PROTO::xwaylandShell->destroyResource(this);
+}
+
+void CXWaylandSurfaceResource::notifyDestroy() {
+    if (m_destroyNotified)
+        return;
+
+    m_destroyNotified = true;
     events.destroy.emit();
 }
 

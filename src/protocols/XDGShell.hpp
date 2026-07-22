@@ -154,6 +154,9 @@ class CXDGToplevelResource {
         Vector2D maxSize = {1337420, 694200};
     } m_pending, m_current;
 
+    bool                                  m_sizeLimitsDirty   = false;
+    bool                                  m_sizeLimitsChanged = false;
+
     WP<CXDGToplevelResource>              m_parent;
     WP<CXDGDialogV1Resource>              m_dialog;
 
@@ -215,6 +218,7 @@ class CXDGSurfaceResource {
 
     bool     m_initialCommit = true;
     bool     m_mapped        = false;
+    bool     m_geometryDirty = false;
 
     uint32_t scheduleConfigure();
     // do not call directly
@@ -233,6 +237,7 @@ class CXDGSurfaceResource {
 
     struct {
         CHyprSignalListener surfaceDestroy;
+        CHyprSignalListener contentUpdate;
         CHyprSignalListener surfaceCommit;
     } m_listeners;
 

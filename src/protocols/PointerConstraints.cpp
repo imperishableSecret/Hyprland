@@ -10,7 +10,7 @@
 #include "../output/Monitor.hpp"
 
 CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region_, zwpPointerConstraintsV1Lifetime lifetime_) :
-    m_resourceLocked(resource_), m_locked(true), m_lifetime(lifetime_) {
+    m_resourceLocked(resource_), m_surface(surf), m_locked(true), m_lifetime(lifetime_) {
     if UNLIKELY (!resource_->resource())
         return;
 
@@ -24,6 +24,7 @@ CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWL
 
     if (region_)
         m_region.set(CWLRegionResource::fromResource(region_)->m_region);
+    m_pendingRegion = m_region;
 
     resource_->setSetRegion([this](CZwpLockedPointerV1* p, wl_resource* region) { onSetRegion(region); });
     resource_->setSetCursorPositionHint([this](CZwpLockedPointerV1* p, wl_fixed_t x, wl_fixed_t y) {
@@ -32,24 +33,23 @@ CPointerConstraint::CPointerConstraint(SP<CZwpLockedPointerV1> resource_, SP<CWL
         if (!m_hlSurface)
             return;
 
-        m_hintSet = true;
-
-        float      scale   = 1.f;
+        float      scale   = 1.F;
         const auto PWINDOW = Desktop::View::CWindow::fromView(m_hlSurface->view());
         if (PWINDOW) {
             const auto ISXWL = PWINDOW->m_isX11;
             scale            = ISXWL && *PXWLFORCESCALEZERO ? PWINDOW->m_X11SurfaceScaledBy : 1.f;
         }
 
-        m_positionHint = {wl_fixed_to_double(x) / scale, wl_fixed_to_double(y) / scale};
-        g_pInputManager->simulateMouseMovement();
+        m_pendingHintSet      = true;
+        m_pendingPositionHint = {wl_fixed_to_double(x) / scale, wl_fixed_to_double(y) / scale};
+        m_dirty               = true;
     });
 
     sharedConstructions();
 }
 
 CPointerConstraint::CPointerConstraint(SP<CZwpConfinedPointerV1> resource_, SP<CWLSurfaceResource> surf, wl_resource* region_, zwpPointerConstraintsV1Lifetime lifetime_) :
-    m_resourceConfined(resource_), m_lifetime(lifetime_) {
+    m_resourceConfined(resource_), m_surface(surf), m_lifetime(lifetime_) {
     if UNLIKELY (!resource_->resource())
         return;
 
@@ -63,6 +63,7 @@ CPointerConstraint::CPointerConstraint(SP<CZwpConfinedPointerV1> resource_, SP<C
 
     if (region_)
         m_region.set(CWLRegionResource::fromResource(region_)->m_region);
+    m_pendingRegion = m_region;
 
     resource_->setSetRegion([this](CZwpConfinedPointerV1* p, wl_resource* region) { onSetRegion(region); });
 
@@ -80,6 +81,32 @@ CPointerConstraint::~CPointerConstraint() {
 }
 
 void CPointerConstraint::sharedConstructions() {
+    m_listeners.contentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
+        if (!m_dirty)
+            return;
+
+        const CRegion  REGION        = m_pendingRegion;
+        const bool     HINT_SET      = m_pendingHintSet;
+        const Vector2D POSITION_HINT = m_pendingPositionHint;
+        update->addActivation([self = m_self, REGION, HINT_SET, POSITION_HINT] {
+            if (!self)
+                return;
+
+            self->m_region       = REGION;
+            self->m_hintSet      = HINT_SET;
+            self->m_positionHint = HINT_SET && !REGION.empty() ? REGION.closestPoint(POSITION_HINT) : POSITION_HINT;
+            self->m_stateChanged = true;
+        });
+        m_dirty = false;
+    });
+    m_listeners.surfaceCommit = m_surface->m_events.commit.listen([this] {
+        if (!m_stateChanged)
+            return;
+
+        m_stateChanged = false;
+        g_pInputManager->simulateMouseMovement();
+    });
+
     if (m_hlSurface) {
         m_listeners.destroySurface = m_hlSurface->m_events.destroy.listen([this] {
             m_hlSurface.reset();
@@ -150,15 +177,13 @@ bool CPointerConstraint::isActive() {
 
 void CPointerConstraint::onSetRegion(wl_resource* wlRegion) {
     if (!wlRegion) {
-        m_region.clear();
+        m_pendingRegion.clear();
+        m_dirty = true;
         return;
     }
 
-    const auto REGION = m_region.set(CWLRegionResource::fromResource(wlRegion)->m_region);
-
-    m_region.set(REGION);
-    m_positionHint = m_region.closestPoint(m_positionHint);
-    g_pInputManager->simulateMouseMovement(); // to warp the cursor if anything's amiss
+    m_pendingRegion = CWLRegionResource::fromResource(wlRegion)->m_region;
+    m_dirty         = true;
 }
 
 SP<Desktop::View::CWLSurface> CPointerConstraint::owner() {
@@ -229,6 +254,8 @@ void CPointerConstraintsProtocol::onNewConstraint(SP<CPointerConstraint> constra
         LOGM(Log::ERR, "New constraint has no CWLSurface owner??");
         return;
     }
+
+    constraint->m_self = constraint;
 
     const auto OWNER = constraint->owner();
 

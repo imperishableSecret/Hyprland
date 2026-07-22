@@ -26,8 +26,22 @@ class CXWaylandSurfaceResource {
     WP<CXWaylandSurfaceResource> m_self;
 
   private:
+    void                   destroy();
+    void                   notifyDestroy();
+
     SP<CXwaylandSurfaceV1> m_resource;
-    wl_client*             m_client = nullptr;
+    wl_client*             m_client              = nullptr;
+    uint64_t               m_pendingSerial       = 0;
+    bool                   m_serialDirty         = false;
+    bool                   m_associationCaptured = false;
+    bool                   m_stateChanged        = false;
+    bool                   m_destroyNotified     = false;
+
+    struct {
+        CHyprSignalListener contentUpdate;
+        CHyprSignalListener surfaceCommit;
+        CHyprSignalListener surfaceDestroy;
+    } m_listeners;
 };
 
 class CXWaylandShellResource {
