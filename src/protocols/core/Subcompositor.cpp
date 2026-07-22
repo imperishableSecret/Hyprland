@@ -2,6 +2,21 @@
 #include "Compositor.hpp"
 #include <algorithm>
 
+static void collectSubsurfaceTree(const SP<CWLSurfaceResource>& surface, std::vector<SP<CWLSurfaceResource>>& result) {
+    if (!surface || std::ranges::find(result, surface) != result.end())
+        return;
+
+    result.emplace_back(surface);
+
+    for (const auto& subsurfaceRef : surface->m_subsurfaces) {
+        const auto SUBSURFACE = subsurfaceRef.lock();
+        if (!SUBSURFACE)
+            continue;
+
+        collectSubsurfaceTree(SUBSURFACE->m_surface.lock(), result);
+    }
+}
+
 CWLSubsurfaceResource::CWLSubsurfaceResource(SP<CWlSubsurface> resource_, SP<CWLSurfaceResource> surface_, SP<CWLSurfaceResource> parent_) :
     m_surface(surface_), m_parent(parent_), m_resource(resource_) {
     if UNLIKELY (!good())
@@ -12,7 +27,26 @@ CWLSubsurfaceResource::CWLSubsurfaceResource(SP<CWlSubsurface> resource_, SP<CWL
 
     m_resource->setSetPosition([this](CWlSubsurface* r, int32_t x, int32_t y) { m_position = {x, y}; });
 
-    m_resource->setSetDesync([this](CWlSubsurface* r) { m_sync = false; });
+    m_resource->setSetDesync([this](CWlSubsurface* r) {
+        if (!m_sync)
+            return;
+
+        std::vector<SP<CWLSurfaceResource>> surfaces;
+        collectSubsurfaceTree(m_surface.lock(), surfaces);
+        m_sync = false;
+
+        bool converted = false;
+        for (const auto& surface : surfaces) {
+            if (surface->effectivelySynchronized())
+                continue;
+
+            surface->m_contentUpdates.convertUnreachableSynchronizedUpdates();
+            converted = true;
+        }
+
+        if (converted && !surfaces.empty())
+            surfaces.front()->m_contentUpdates.tryProcess();
+    });
     m_resource->setSetSync([this](CWlSubsurface* r) { m_sync = true; });
 
     m_resource->setPlaceAbove([this](CWlSubsurface* r, wl_resource* surf) {

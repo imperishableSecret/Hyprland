@@ -37,6 +37,28 @@ static bool addSafeDamage(CRegion& damage, int32_t x, int32_t y, int32_t w, int3
     return true;
 }
 
+static size_t subsurfaceDepth(const SP<CWLSurfaceResource>& surface) {
+    auto                                current = surface;
+    std::vector<SP<CWLSurfaceResource>> visited;
+    size_t                              depth = 0;
+
+    while (current && current->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
+        if (std::ranges::find(visited, current) != visited.end())
+            break;
+
+        visited.emplace_back(current);
+
+        const auto SUBSURFACE = sc<CSubsurfaceRole*>(current->m_role.get())->m_subsurface.lock();
+        if (!SUBSURFACE)
+            break;
+
+        current = SUBSURFACE->m_parent.lock();
+        ++depth;
+    }
+
+    return depth;
+}
+
 class CDefaultSurfaceRole : public ISurfaceRole {
   public:
     virtual eSurfaceRole role() {
@@ -161,8 +183,10 @@ CWLSurfaceResource::CWLSurfaceResource(SP<CWlSurface> resource_) : m_resource(re
 
         m_events.precommit.emit();
 
-        auto update = m_contentUpdates.enqueue(makeUnique<CContentUpdate>(m_pending, m_self));
+        const auto MODE   = effectivelySynchronized() ? eContentUpdateMode::SYNCHRONIZED : eContentUpdateMode::DESYNCHRONIZED;
+        auto       update = m_contentUpdates.enqueue(makeUnique<CContentUpdate>(m_pending, m_self, MODE));
         m_pending.reset();
+        attachSynchronizedChildren(update);
         prepareFifoState(*update);
 
         m_events.contentUpdate.emit(update);
@@ -652,30 +676,51 @@ void CWLSurfaceResource::applyUpdate(CContentUpdate& update) {
 }
 
 void CWLSurfaceResource::publishUpdate() {
-    if (m_role->role() == SURFACE_ROLE_SUBSURFACE) {
-        auto subsurface = sc<CSubsurfaceRole*>(m_role.get())->m_subsurface.lock();
-        if (subsurface->m_sync)
-            return;
-
-        m_events.commit.emit();
-    } else {
-        // send commit to all synced surfaces in this tree.
-        breadthfirst(
-            [](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) {
-                if (surf->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
-                    auto subsurface = sc<CSubsurfaceRole*>(surf->m_role.get())->m_subsurface.lock();
-                    if (!subsurface->m_sync)
-                        return;
-                }
-                surf->m_events.commit.emit();
-            },
-            nullptr);
-    }
+    m_events.commit.emit();
 
     // release the buffer if it's synchronous (SHM) as updateSynchronousTexture() has copied the buffer data to a GPU tex
     // if it doesn't have a role, we can't release it yet, in case it gets turned into a cursor.
     if (m_current.buffer && m_current.buffer->isSynchronous() && m_role->role() != SURFACE_ROLE_UNASSIGNED)
         dropCurrentBuffer();
+}
+
+bool CWLSurfaceResource::effectivelySynchronized() const {
+    auto                                surface = m_self.lock();
+    std::vector<SP<CWLSurfaceResource>> visited;
+
+    while (surface && surface->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
+        if (std::ranges::find(visited, surface) != visited.end())
+            return false;
+
+        visited.emplace_back(surface);
+
+        const auto SUBSURFACE = sc<CSubsurfaceRole*>(surface->m_role.get())->m_subsurface.lock();
+        if (!SUBSURFACE)
+            return false;
+
+        if (SUBSURFACE->m_sync)
+            return true;
+
+        surface = SUBSURFACE->m_parent.lock();
+    }
+
+    return false;
+}
+
+void CWLSurfaceResource::attachSynchronizedChildren(const WP<CContentUpdate>& update) {
+    std::erase_if(m_subsurfaces, [](const auto& subsurface) { return !subsurface; });
+
+    for (const auto& subsurfaceRef : m_subsurfaces) {
+        const auto SUBSURFACE = subsurfaceRef.lock();
+        if (!SUBSURFACE)
+            continue;
+
+        const auto SURFACE = SUBSURFACE->m_surface.lock();
+        if (!SURFACE)
+            continue;
+
+        SURFACE->m_contentUpdates.claimNewestSynchronized(update);
+    }
 }
 
 PImageDescription CWLSurfaceResource::getPreferredImageDescription() {
@@ -979,6 +1024,129 @@ bool CWLCompositorResource::good() {
 
 CWLCompositorProtocol::CWLCompositorProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
     ;
+}
+
+void CWLCompositorProtocol::registerContentUpdateCandidate(WP<CContentUpdate> update) {
+    if (!update || std::ranges::find(m_contentUpdateCandidates, update) != m_contentUpdateCandidates.end())
+        return;
+
+    m_contentUpdateCandidates.emplace_back(std::move(update));
+}
+
+bool CWLCompositorProtocol::collectContentUpdateGraph(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& graph, std::vector<WP<CContentUpdate>>& visiting) {
+    if (!update || update->m_applied || std::ranges::find(graph, update) != graph.end())
+        return true;
+
+    if (!update->finalized() || !update->ready())
+        return false;
+
+    if (std::ranges::find(visiting, update) != visiting.end()) {
+        Log::logger->log(Log::ERR, "Content Update dependency cycle detected");
+        return false;
+    }
+
+    visiting.emplace_back(update);
+
+    if (!collectContentUpdateGraph(update->m_previous, graph, visiting)) {
+        visiting.pop_back();
+        return false;
+    }
+
+    for (const auto& dependency : update->m_dependencies) {
+        if (collectContentUpdateGraph(dependency, graph, visiting))
+            continue;
+
+        visiting.pop_back();
+        return false;
+    }
+
+    visiting.pop_back();
+    graph.emplace_back(update);
+    return true;
+}
+
+bool CWLCompositorProtocol::applyContentUpdateGraph(const std::vector<WP<CContentUpdate>>& graph) {
+    std::vector<SP<CWLSurfaceResource>> surfaces;
+    surfaces.reserve(graph.size());
+
+    for (const auto& update : graph) {
+        if (!update || update->m_applied)
+            continue;
+
+        const auto SURFACE = update->m_surface.lock();
+        if (!SURFACE)
+            return false;
+
+        if (std::ranges::find(surfaces, SURFACE) == surfaces.end())
+            surfaces.emplace_back(SURFACE);
+    }
+
+    for (const auto& update : graph) {
+        if (!update || update->m_applied)
+            continue;
+
+        const auto SURFACE = update->m_surface.lock();
+        ASSERT(SURFACE);
+        SURFACE->applyUpdate(*update);
+        update->m_applied = true;
+    }
+
+    for (const auto& surface : surfaces)
+        surface->m_contentUpdates.removeApplied();
+
+    for (const auto& surface : surfaces)
+        surface->m_contentUpdates.registerCandidates();
+
+    std::ranges::stable_sort(surfaces, {}, subsurfaceDepth);
+    for (const auto& surface : surfaces)
+        surface->publishUpdate();
+
+    return !surfaces.empty();
+}
+
+void CWLCompositorProtocol::processContentUpdates() {
+    if (m_processingContentUpdates) {
+        m_processContentUpdatesAgain = true;
+        return;
+    }
+
+    m_processingContentUpdates = true;
+
+    bool progressed = false;
+    do {
+        progressed                   = false;
+        m_processContentUpdatesAgain = false;
+
+        std::erase_if(m_contentUpdateCandidates, [](const auto& candidate) {
+            if (!candidate)
+                return true;
+
+            const auto SURFACE = candidate->m_surface.lock();
+            return !SURFACE || !SURFACE->m_contentUpdates.isCandidate(candidate);
+        });
+
+        const auto candidates = m_contentUpdateCandidates;
+        for (const auto& candidate : candidates) {
+            if (!candidate)
+                continue;
+
+            const auto SURFACE = candidate->m_surface.lock();
+            if (!SURFACE || !SURFACE->m_contentUpdates.isCandidate(candidate))
+                continue;
+
+            std::vector<WP<CContentUpdate>> graph;
+            std::vector<WP<CContentUpdate>> visiting;
+            if (!collectContentUpdateGraph(candidate, graph, visiting))
+                continue;
+
+            if (applyContentUpdateGraph(graph)) {
+                progressed = true;
+                break;
+            }
+        }
+    } while (progressed || m_processContentUpdatesAgain);
+
+    m_processingContentUpdates = false;
 }
 
 void CWLCompositorProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {

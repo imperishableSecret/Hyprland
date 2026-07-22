@@ -9,6 +9,12 @@
 #include <vector>
 
 class CWLSurfaceResource;
+class CWLCompositorProtocol;
+
+enum class eContentUpdateMode : uint8_t {
+    SYNCHRONIZED,
+    DESYNCHRONIZED,
+};
 
 enum class eContentUpdateConstraint : uint8_t {
     NONE  = 0,
@@ -26,11 +32,12 @@ eContentUpdateConstraint  operator~(eContentUpdateConstraint constraint);
 // Commit-owned state snapshot with mutable readiness and lifecycle bookkeeping.
 class CContentUpdate {
   public:
-    CContentUpdate(const SSurfaceState& state, WP<CWLSurfaceResource> surface);
+    CContentUpdate(const SSurfaceState& state, WP<CWLSurfaceResource> surface, eContentUpdateMode mode = eContentUpdateMode::DESYNCHRONIZED);
 
     SSurfaceState&         state();
     const SSurfaceState&   state() const;
     WP<CWLSurfaceResource> surface() const;
+    eContentUpdateMode     mode() const;
     void                   addConstraint(eContentUpdateConstraint constraint);
     void                   clearConstraint(eContentUpdateConstraint constraint);
     void                   addActivation(std::move_only_function<void()>&& activation);
@@ -40,15 +47,23 @@ class CContentUpdate {
   private:
     SSurfaceState                                m_state;
     WP<CWLSurfaceResource>                       m_surface;
+    WP<CContentUpdate>                           m_previous;
+    std::vector<WP<CContentUpdate>>              m_dependencies;
+    WP<CContentUpdate>                           m_claimedBy;
+    eContentUpdateMode                           m_mode        = eContentUpdateMode::DESYNCHRONIZED;
     eContentUpdateConstraint                     m_constraints = eContentUpdateConstraint::NONE;
     std::vector<std::move_only_function<void()>> m_activations;
     bool                                         m_finalized = false;
+    bool                                         m_applied   = false;
 
     void                                         finalize();
     void                                         applyState();
+    bool                                         addDependency(WP<CContentUpdate> dependency);
+    void                                         removeDependency(const WP<CContentUpdate>& dependency);
 
     friend class CContentUpdateQueue;
     friend class CContentUpdateTestAccess;
+    friend class CWLCompositorProtocol;
     friend class CWLSurfaceResource;
 };
 
@@ -65,12 +80,23 @@ class CContentUpdateQueue {
     void               clearFirstConstraints(eContentUpdateConstraint constraints);
     void               clearFifoEpoch(uint64_t epoch);
     uint64_t           latestFifoBarrierEpoch() const;
+    void               claimNewestSynchronized(const WP<CContentUpdate>& dependent);
+    void               convertUnreachableSynchronizedUpdates();
     void               finalize(const WP<CContentUpdate>& update);
     void               tryProcess();
 
   private:
-    std::deque<UP<CContentUpdate>>                    m_queue;
-    WP<CWLSurfaceResource>                            m_surface;
+    std::deque<UP<CContentUpdate>>                          m_queue;
+    WP<CWLSurfaceResource>                                  m_surface;
 
-    typename std::deque<UP<CContentUpdate>>::iterator find(const WP<CContentUpdate>& update);
+    typename std::deque<UP<CContentUpdate>>::iterator       find(const WP<CContentUpdate>& update);
+    typename std::deque<UP<CContentUpdate>>::const_iterator find(const WP<CContentUpdate>& update) const;
+    WP<CContentUpdate>                                      newestUnclaimedSynchronized() const;
+    bool                                                    isCandidate(const WP<CContentUpdate>& update) const;
+    bool                                                    reachableFromDesynchronized(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& visiting) const;
+    void                                                    removeApplied();
+    void                                                    registerCandidates();
+
+    friend class CWLCompositorProtocol;
+    friend class CContentUpdateTestAccess;
 };

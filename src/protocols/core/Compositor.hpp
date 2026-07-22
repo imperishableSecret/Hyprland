@@ -126,6 +126,7 @@ class CWLSurfaceResource {
     void                                   drainSyncFds(WP<CContentUpdate> update);
     void                                   applyUpdate(CContentUpdate& update);
     void                                   publishUpdate();
+    bool                                   effectivelySynchronized() const;
     NColorManagement::PImageDescription    getPreferredImageDescription();
     void                                   sortSubsurfaces();
     bool                                   hasVisibleSubsurface();
@@ -155,6 +156,7 @@ class CWLSurfaceResource {
     void                               bfHelper(std::span<const SP<CWLSurfaceResource>> nodes, std::function<void(SP<CWLSurfaceResource>, const Vector2D&, void*)> fn, void* data);
     SP<CWLSurfaceResource>             findFirstPreorderHelper(SP<CWLSurfaceResource> root, std::function<bool(SP<CWLSurfaceResource>)> fn);
     void                               updateCursorShm(CRegion damage = CBox{0, 0, INT16_MAX, INT16_MAX});
+    void                               attachSynchronizedChildren(const WP<CContentUpdate>& update);
     void                               prepareFifoState(CContentUpdate& update);
     void                               activateFifoBarrier(uint64_t epoch);
     void                               scheduleFifoFrame();
@@ -185,6 +187,10 @@ class CWLCompositorProtocol : public IWaylandProtocol {
     } m_events;
 
   private:
+    void registerContentUpdateCandidate(WP<CContentUpdate> update);
+    void processContentUpdates();
+    bool collectContentUpdateGraph(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& graph, std::vector<WP<CContentUpdate>>& visiting);
+    bool applyContentUpdateGraph(const std::vector<WP<CContentUpdate>>& graph);
     void destroyResource(CWLCompositorResource* resource);
     void destroyResource(CWLSurfaceResource* resource);
     void destroyResource(CWLRegionResource* resource);
@@ -193,7 +199,11 @@ class CWLCompositorProtocol : public IWaylandProtocol {
     std::vector<SP<CWLCompositorResource>> m_managers;
     std::vector<SP<CWLSurfaceResource>>    m_surfaces;
     std::vector<SP<CWLRegionResource>>     m_regions;
+    std::vector<WP<CContentUpdate>>        m_contentUpdateCandidates;
+    bool                                   m_processingContentUpdates   = false;
+    bool                                   m_processContentUpdatesAgain = false;
 
+    friend class CContentUpdateQueue;
     friend class CWLSurfaceResource;
     friend class CWLCompositorResource;
     friend class CWLRegionResource;

@@ -27,7 +27,7 @@ eContentUpdateConstraint operator~(eContentUpdateConstraint constraint) {
     return sc<eContentUpdateConstraint>(~sc<uint8_t>(constraint));
 }
 
-CContentUpdate::CContentUpdate(const SSurfaceState& state, WP<CWLSurfaceResource> surface) : m_state(state), m_surface(std::move(surface)) {}
+CContentUpdate::CContentUpdate(const SSurfaceState& state, WP<CWLSurfaceResource> surface, eContentUpdateMode mode) : m_state(state), m_surface(std::move(surface)), m_mode(mode) {}
 
 SSurfaceState& CContentUpdate::state() {
     return m_state;
@@ -41,6 +41,10 @@ WP<CWLSurfaceResource> CContentUpdate::surface() const {
     return m_surface;
 }
 
+eContentUpdateMode CContentUpdate::mode() const {
+    return m_mode;
+}
+
 void CContentUpdate::addConstraint(eContentUpdateConstraint constraint) {
     ASSERT(!m_finalized);
     ASSERT(constraint != eContentUpdateConstraint::NONE);
@@ -50,6 +54,15 @@ void CContentUpdate::addConstraint(eContentUpdateConstraint constraint) {
 void CContentUpdate::clearConstraint(eContentUpdateConstraint constraint) {
     ASSERT(constraint != eContentUpdateConstraint::NONE);
     m_constraints &= ~constraint;
+}
+
+bool CContentUpdate::addDependency(WP<CContentUpdate> dependency) {
+    ASSERT(!m_finalized);
+    if (!dependency || dependency.get() == this || std::ranges::find(m_dependencies, dependency) != m_dependencies.end())
+        return false;
+
+    m_dependencies.emplace_back(std::move(dependency));
+    return true;
 }
 
 void CContentUpdate::addActivation(std::move_only_function<void()>&& activation) {
@@ -74,6 +87,10 @@ void CContentUpdate::applyState() {
         activation();
 }
 
+void CContentUpdate::removeDependency(const WP<CContentUpdate>& dependency) {
+    std::erase_if(m_dependencies, [&dependency](const auto& candidate) { return !candidate || candidate == dependency; });
+}
+
 CContentUpdateQueue::CContentUpdateQueue(WP<CWLSurfaceResource> surface) : m_surface(std::move(surface)) {}
 
 void CContentUpdateQueue::clear() {
@@ -84,6 +101,9 @@ void CContentUpdateQueue::clear() {
 }
 
 WP<CContentUpdate> CContentUpdateQueue::enqueue(UP<CContentUpdate>&& update) {
+    if (!m_queue.empty())
+        update->m_previous = WP<CContentUpdate>{m_queue.back()};
+
     return m_queue.emplace_back(std::move(update));
 }
 
@@ -94,6 +114,7 @@ void CContentUpdateQueue::drop(const WP<CContentUpdate>& update) {
 
     PROTO::presentation->discardFeedbacks((*IT)->state().presentationFeedbacks);
     m_queue.erase(IT);
+    tryProcess();
 }
 
 void CContentUpdateQueue::addConstraint(const WP<CContentUpdate>& update, eContentUpdateConstraint constraint) {
@@ -141,6 +162,49 @@ uint64_t CContentUpdateQueue::latestFifoBarrierEpoch() const {
     return UPDATE == m_queue.rend() ? 0 : (*UPDATE)->state().fifoBarrierEpoch;
 }
 
+WP<CContentUpdate> CContentUpdateQueue::newestUnclaimedSynchronized() const {
+    if (m_queue.empty() || m_queue.back()->m_mode != eContentUpdateMode::SYNCHRONIZED || m_queue.back()->m_claimedBy)
+        return {};
+
+    return WP<CContentUpdate>{m_queue.back()};
+}
+
+void CContentUpdateQueue::claimNewestSynchronized(const WP<CContentUpdate>& dependent) {
+    if (!dependent)
+        return;
+
+    const auto DEPENDENCY = newestUnclaimedSynchronized();
+    if (!DEPENDENCY || !dependent->addDependency(DEPENDENCY))
+        return;
+
+    DEPENDENCY->m_claimedBy = dependent;
+}
+
+void CContentUpdateQueue::convertUnreachableSynchronizedUpdates() {
+    std::vector<bool> reachable;
+    reachable.reserve(m_queue.size());
+
+    for (const auto& update : m_queue) {
+        std::vector<WP<CContentUpdate>> visiting;
+        reachable.emplace_back(reachableFromDesynchronized(WP<CContentUpdate>{update}, visiting));
+    }
+
+    for (size_t i = 0; i < m_queue.size(); ++i) {
+        auto& update = m_queue[i];
+        if (update->m_mode != eContentUpdateMode::SYNCHRONIZED || reachable[i])
+            continue;
+
+        const WP<CContentUpdate> UPDATE{update};
+        if (update->m_claimedBy)
+            update->m_claimedBy->removeDependency(UPDATE);
+
+        update->m_claimedBy.reset();
+        update->m_mode = eContentUpdateMode::DESYNCHRONIZED;
+    }
+
+    registerCandidates();
+}
+
 void CContentUpdateQueue::finalize(const WP<CContentUpdate>& update) {
     const auto IT = find(update);
     if (IT == m_queue.end())
@@ -157,17 +221,68 @@ auto CContentUpdateQueue::find(const WP<CContentUpdate>& update) -> std::deque<U
     return std::ranges::find_if(m_queue, [&update](const auto& queued) { return queued.get() == update.get(); });
 }
 
-void CContentUpdateQueue::tryProcess() {
-    while (!m_queue.empty()) {
-        auto& update = m_queue.front();
-        if ((update->m_constraints & eContentUpdateConstraint::FIFO) != eContentUpdateConstraint::NONE && !m_surface->fifoBarrierMatches(update->state().fifoWaitEpoch))
-            update->clearConstraint(eContentUpdateConstraint::FIFO);
+auto CContentUpdateQueue::find(const WP<CContentUpdate>& update) const -> std::deque<UP<CContentUpdate>>::const_iterator {
+    if (!update)
+        return m_queue.end();
 
-        if (!update->finalized() || !update->ready())
-            return;
+    return std::ranges::find_if(m_queue, [&update](const auto& queued) { return queued.get() == update.get(); });
+}
 
-        m_surface->applyUpdate(*update);
-        m_surface->publishUpdate();
-        m_queue.pop_front();
+bool CContentUpdateQueue::isCandidate(const WP<CContentUpdate>& update) const {
+    const auto IT = find(update);
+    if (IT == m_queue.end() || (*IT)->m_mode != eContentUpdateMode::DESYNCHRONIZED)
+        return false;
+
+    return std::ranges::none_of(m_queue.begin(), IT, [](const auto& queued) { return queued->m_mode == eContentUpdateMode::SYNCHRONIZED; });
+}
+
+bool CContentUpdateQueue::reachableFromDesynchronized(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& visiting) const {
+    if (!update)
+        return false;
+
+    if (update->m_mode == eContentUpdateMode::DESYNCHRONIZED)
+        return true;
+
+    if (std::ranges::find(visiting, update) != visiting.end())
+        return false;
+
+    visiting.emplace_back(update);
+
+    if (update->m_claimedBy) {
+        const auto SURFACE = update->m_claimedBy->m_surface.lock();
+        if (SURFACE && SURFACE->m_contentUpdates.reachableFromDesynchronized(update->m_claimedBy, visiting)) {
+            visiting.pop_back();
+            return true;
+        }
     }
+
+    const auto IT = find(update);
+    if (IT != m_queue.end()) {
+        const auto NEXT = std::next(IT);
+        if (NEXT != m_queue.end() && (*NEXT)->m_previous == update && reachableFromDesynchronized(WP<CContentUpdate>{*NEXT}, visiting)) {
+            visiting.pop_back();
+            return true;
+        }
+    }
+
+    visiting.pop_back();
+    return false;
+}
+
+void CContentUpdateQueue::removeApplied() {
+    std::erase_if(m_queue, [](const auto& update) { return update->m_applied; });
+}
+
+void CContentUpdateQueue::registerCandidates() {
+    for (const auto& update : m_queue) {
+        if (update->m_mode == eContentUpdateMode::SYNCHRONIZED)
+            break;
+
+        PROTO::compositor->registerContentUpdateCandidate(WP<CContentUpdate>{update});
+    }
+}
+
+void CContentUpdateQueue::tryProcess() {
+    registerCandidates();
+    PROTO::compositor->processContentUpdates();
 }
