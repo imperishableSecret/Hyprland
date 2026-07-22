@@ -131,7 +131,6 @@ class CWLSurfaceResource {
     void                                   sortSubsurfaces();
     bool                                   hasVisibleSubsurface();
     bool                                   isTearing();
-    bool                                   fifoBarrierMatches(uint64_t epoch) const;
     uint64_t                               fifoBarrierEpoch() const;
     void                                   stageFifoLatch(PHLMONITOR monitor, bool discarded = false);
     void                                   clearFifoBarrier(uint64_t epoch);

@@ -1,6 +1,5 @@
 #include "Fifo.hpp"
 #include "core/Compositor.hpp"
-#include "core/Subcompositor.hpp"
 #include "../config/ConfigValue.hpp"
 #include "../state/MonitorState.hpp"
 #include "../desktop/view/View.hpp"
@@ -9,21 +8,8 @@
 
 #include <algorithm>
 
-static bool isSynchronizedSubsurface(SP<CWLSurfaceResource> surface) {
-    while (surface && surface->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
-        const auto SUBSURFACE = sc<CSubsurfaceRole*>(surface->m_role.get())->m_subsurface.lock();
-        if (!SUBSURFACE)
-            return false;
-        if (SUBSURFACE->m_sync)
-            return true;
-        surface = SUBSURFACE->m_parent.lock();
-    }
-
-    return false;
-}
-
 bool NFifo::shouldLock(const SP<CWLSurfaceResource>& surface) {
-    if (!surface || !surface->m_mapped || surface->isTearing() || isSynchronizedSubsurface(surface))
+    if (!surface || !surface->m_mapped || surface->isTearing())
         return false;
 
     static const auto PINVIS = CConfigValue<Hyprlang::INT>("render:not_shown_fifo_lock");

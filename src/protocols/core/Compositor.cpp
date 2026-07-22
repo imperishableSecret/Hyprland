@@ -856,7 +856,7 @@ void CWLSurfaceResource::prepareFifoState(CContentUpdate& update) {
     if (state.waitBarrier) {
         const uint64_t QUEUED_EPOCH = m_contentUpdates.latestFifoBarrierEpoch();
         state.fifoWaitEpoch         = QUEUED_EPOCH != 0 ? QUEUED_EPOCH : m_fifoBarrier.activeEpoch();
-        if (state.fifoWaitEpoch != 0 && NFifo::shouldLock(m_self.lock()))
+        if (state.fifoWaitEpoch != 0 && update.mode() == eContentUpdateMode::DESYNCHRONIZED && NFifo::shouldLock(m_self.lock()))
             update.addConstraint(eContentUpdateConstraint::FIFO);
         else if (state.fifoWaitEpoch == 0) {
             static const auto PPEND = CConfigValue<Config::INTEGER>("debug:fifo_pending_workaround");
@@ -895,10 +895,6 @@ void CWLSurfaceResource::activateFifoBarrier(uint64_t epoch) {
         m_fifoEmergencyTimer->updateTimeout(EMERGENCY_TIMEOUT);
 
     scheduleFifoFrame();
-}
-
-bool CWLSurfaceResource::fifoBarrierMatches(uint64_t epoch) const {
-    return m_fifoBarrier.matches(epoch);
 }
 
 uint64_t CWLSurfaceResource::fifoBarrierEpoch() const {
