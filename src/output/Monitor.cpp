@@ -159,6 +159,12 @@ void CMonitor::onConnect(bool noRule) {
             flags &= ~Aquamarine::IOutput::AQ_OUTPUT_PRESENT_HW_CLOCK;
         }
 
+        const auto PRESENTATION_TIME = Time::fromTimespec(&ts);
+        if (event.presented && event.refresh > 0 && (flags & Aquamarine::IOutput::AQ_OUTPUT_PRESENT_VSYNC) && canTrackFixedPresentationPhase())
+            updateFixedPresentationPhase(PRESENTATION_TIME, std::chrono::nanoseconds{event.refresh});
+        else
+            invalidateFixedPresentationPhase();
+
         if (event.presentationID != 0) {
             if (event.presented)
                 PROTO::presentation->onPresented(m_self.lock(), event.presentationID, ts, event.refresh, event.seq, flags);
@@ -202,7 +208,7 @@ void CMonitor::onConnect(bool noRule) {
         m_frameScheduler->onPresented();
         m_lastPresentationTimer.reset();
 
-        m_events.presented.emit(Time::fromTimespec(&ts));
+        m_events.presented.emit(PRESENTATION_TIME);
     });
 
     m_listeners.destroy = m_output->events.destroy.listen([this] {
@@ -407,6 +413,7 @@ void CMonitor::onDisconnect(bool destroy) {
         State::monitorLayoutController()->scheduleRecheck();
     }};
 
+    invalidateFixedPresentationPhase();
     m_frameScheduler.reset();
     clearModeRetry();
     m_activeScanoutSurface.reset();
@@ -746,6 +753,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule) {
         if (!m_state.commit())
             Log::logger->log(Log::WARN, "state.commit() failed in CMonitor::applyMonitorRule");
 
+        invalidateFixedPresentationPhase();
         m_events.modeChanged.emit();
 
         return true;
@@ -1084,6 +1092,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule) {
     Log::logger->log(Log::DEBUG, "Monitor {} data dump: res {:X}@{:.2f}Hz, scale {:.2f}, transform {}, pos {:X}, 10b {}", m_name, m_pixelSize, m_refreshRate, m_scale,
                      sc<int>(m_transform), m_position, sc<int>(m_enabled10bit));
 
+    invalidateFixedPresentationPhase();
     m_events.modeChanged.emit();
 
     return true;
@@ -1411,6 +1420,7 @@ void CMonitor::setMirror(const std::string& mirrorOf) {
         Pointer::mgr()->lockSoftwareForMonitor(PMIRRORMON);
     }
 
+    invalidateFixedPresentationPhase();
     m_events.modeChanged.emit();
     Event::bus()->m_events.monitor.layoutChanged.emit();
 }
@@ -2153,6 +2163,84 @@ bool CMonitor::commitOutput(bool zeroCopy) {
     return SUCCESS;
 }
 
+void CMonitor::registerCommitTimingReservation(WP<CContentUpdate> update, const Time::steady_tp& target) {
+    if (!update || target <= Time::steadyNow() || !hasValidFixedPresentationPhase())
+        return;
+
+    const auto EXISTING = std::ranges::find_if(m_commitTimingReservations, [&update](const auto& reservation) { return reservation.update == update; });
+    if (EXISTING != m_commitTimingReservations.end()) {
+        EXISTING->target = target;
+        return;
+    }
+
+    m_commitTimingReservations.emplace_back(SCommitTimingReservation{
+        .update = std::move(update),
+        .target = target,
+    });
+}
+
+bool CMonitor::canTrackFixedPresentationPhase() const {
+    return m_output && m_enabled && m_dpmsStatus && !m_output->state->state().adaptiveSync && !m_tearingState.activelyTearing;
+}
+
+bool CMonitor::hasValidFixedPresentationPhase() const {
+    return m_fixedPresentationPhase && m_fixedPresentationPhase->refresh > Time::steady_dur::zero() && canTrackFixedPresentationPhase();
+}
+
+void CMonitor::updateFixedPresentationPhase(const Time::steady_tp& presentation, Time::steady_dur refresh) {
+    m_fixedPresentationPhase = SFixedPresentationPhase{
+        .presentation = presentation,
+        .refresh      = refresh,
+    };
+}
+
+void CMonitor::invalidateFixedPresentationPhase() {
+    m_fixedPresentationPhase.reset();
+    m_commitTimingReservations.clear();
+}
+
+bool CMonitor::shouldReserveCommitTimingFrame() {
+    if (m_commitTimingReservations.empty())
+        return false;
+
+    if (!hasValidFixedPresentationPhase() || !isTearingBlocked()) {
+        invalidateFixedPresentationPhase();
+        return false;
+    }
+
+    if (m_output->pendingPageFlip() || m_output->pendingIdleFrame())
+        return false;
+
+    const auto NOW = Time::steadyNow();
+    for (auto reservation = m_commitTimingReservations.begin(); reservation != m_commitTimingReservations.end();) {
+        const auto UPDATE  = reservation->update;
+        const auto SURFACE = UPDATE ? UPDATE->surface().lock() : nullptr;
+        if (!UPDATE || !SURFACE || SURFACE->m_enteredOutputs.size() != 1 || SURFACE->m_enteredOutputs.front() != m_self) {
+            reservation = m_commitTimingReservations.erase(reservation);
+            continue;
+        }
+
+        const auto EFFECTIVE_TARGET = PROTO::compositor ? PROTO::compositor->effectiveContentUpdateTarget(UPDATE) : std::nullopt;
+        if (!EFFECTIVE_TARGET) {
+            if (Monitor::presentationSlotDue(*m_fixedPresentationPhase, NOW, reservation->target))
+                reservation = m_commitTimingReservations.erase(reservation);
+            else
+                ++reservation;
+            continue;
+        }
+
+        if (!Monitor::presentationSlotDue(*m_fixedPresentationPhase, NOW, *EFFECTIVE_TARGET)) {
+            ++reservation;
+            continue;
+        }
+
+        // Keep suppressing competing frame events until the update is applied and this weak reference expires.
+        return true;
+    }
+
+    return false;
+}
+
 void CMonitor::beginFifoFrame() {
     m_stagedFifoLatches.clear();
 }
@@ -2412,6 +2500,7 @@ void CMonitor::setDPMS(bool on) {
     if (m_dpmsStatus == on)
         return;
 
+    invalidateFixedPresentationPhase();
     m_dpmsStatus = on;
     m_events.dpmsChanged.emit();
 

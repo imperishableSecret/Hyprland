@@ -1,5 +1,6 @@
 #include "CommitTiming.hpp"
 #include "core/Compositor.hpp"
+#include "../output/Monitor.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../managers/eventLoop/EventLoopTimer.hpp"
 #include <algorithm>
@@ -55,6 +56,16 @@ CCommitTimerResource::CCommitTimerResource(UP<CWpCommitTimerV1>&& resource_, SP<
         if (!state.commitTimingTarget)
             return;
 
+        update->addActivation([surface = m_surface] {
+            if (!surface)
+                return;
+
+            for (const auto& monitor : surface->m_enteredOutputs) {
+                if (monitor)
+                    monitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEEDS_FRAME);
+            }
+        });
+
         const auto DELAY = NCommitTiming::timerDelay(*state.commitTimingTarget, Time::steadyNow());
         if (!DELAY)
             return;
@@ -71,6 +82,9 @@ CCommitTimerResource::CCommitTimerResource(UP<CWpCommitTimerV1>&& resource_, SP<
             },
             nullptr);
         g_pEventLoopManager->addTimer(state.timer);
+
+        if (m_surface->m_enteredOutputs.size() == 1 && m_surface->m_enteredOutputs.front())
+            m_surface->m_enteredOutputs.front()->registerCommitTimingReservation(update, *state.commitTimingTarget);
     });
 }
 

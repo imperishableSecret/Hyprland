@@ -118,15 +118,21 @@ void CMonitorFrameScheduler::onFrame() {
         PMONITOR->m_tearingState.frameScheduledWhileBusy = false;
     }
 
-    if (!newSchedulingEnabled()) {
-        ++m_renderGeneration;
-        m_pendingThird = false;
-        g_pHyprRenderer->renderMonitor(PMONITOR);
+    const bool NEW_SCHEDULING = newSchedulingEnabled();
+    if (NEW_SCHEDULING && !m_renderAtFrame) {
+        Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> frame event, but m_renderAtFrame = false.", PMONITOR->m_name);
         return;
     }
 
-    if (!m_renderAtFrame) {
-        Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> frame event, but m_renderAtFrame = false.", PMONITOR->m_name);
+    if (PMONITOR->shouldReserveCommitTimingFrame()) {
+        Log::logger->log(Log::TRACE, "CMonitorFrameScheduler: {} -> reserving frame opportunity for commit timing.", PMONITOR->m_name);
+        return;
+    }
+
+    if (!NEW_SCHEDULING) {
+        ++m_renderGeneration;
+        m_pendingThird = false;
+        g_pHyprRenderer->renderMonitor(PMONITOR);
         return;
     }
 

@@ -27,6 +27,7 @@
 #include "../helpers/signal/Signal.hpp"
 #include "DamageRing.hpp"
 #include "ScanoutKeepalive.hpp"
+#include "CommitTimingReservation.hpp"
 #include <aquamarine/output/Output.hpp>
 #include <aquamarine/allocator/Swapchain.hpp>
 #include <hyprutils/os/FileDescriptor.hpp>
@@ -37,6 +38,7 @@
 
 class CSyncTimeline;
 class CEventLoopTimer;
+class CContentUpdate;
 
 namespace Monitor {
     class CMonitorResources;
@@ -290,6 +292,7 @@ namespace Monitor {
         bool         commitOutput(bool zeroCopy = false);
         void         beginFifoFrame();
         void         stageFifoLatch(WP<CWLSurfaceResource> surface, uint64_t epoch);
+        void         registerCommitTimingReservation(WP<CContentUpdate> update, const Time::steady_tp& target);
         void         handleDSleave();
         bool         canAttemptDirectScanoutFast() const;
         bool         isMultiGPU();
@@ -409,6 +412,11 @@ namespace Monitor {
         bool                    isVrrKeepaliveDue();
         bool                    attemptDirectScanoutSameBuffer(SP<CWLSurfaceResource> surface, SP<IHLBuffer> buffer);
         bool                    trySetFormat(std::span<const uint32_t> formats);
+        bool                    shouldReserveCommitTimingFrame();
+        bool                    canTrackFixedPresentationPhase() const;
+        bool                    hasValidFixedPresentationPhase() const;
+        void                    updateFixedPresentationPhase(const Time::steady_tp& presentation, Time::steady_dur refresh);
+        void                    invalidateFixedPresentationPhase();
 
         bool                    m_doneScheduled  = false;
         bool                    m_vcgtRampsSet   = false;
@@ -442,10 +450,20 @@ namespace Monitor {
         bool                    hasStagedFifoLatches() const;
         void                    finishFifoLatches();
 
-        int                     m_supportsWideColor = 0;
-        int                     m_supportsHDR       = 0;
-        float                   m_minLuminance      = -1.0f;
-        int                     m_maxLuminance      = -1;
-        int                     m_maxAvgLuminance   = -1;
+        struct SCommitTimingReservation {
+            WP<CContentUpdate> update;
+            Time::steady_tp    target;
+        };
+
+        std::optional<SFixedPresentationPhase> m_fixedPresentationPhase;
+        std::vector<SCommitTimingReservation>  m_commitTimingReservations;
+
+        int                                    m_supportsWideColor = 0;
+        int                                    m_supportsHDR       = 0;
+        float                                  m_minLuminance      = -1.0f;
+        int                                    m_maxLuminance      = -1;
+        int                                    m_maxAvgLuminance   = -1;
+
+        friend class CMonitorFrameScheduler;
     };
 }
