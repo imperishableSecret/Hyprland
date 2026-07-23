@@ -40,6 +40,32 @@ TEST(Fifo, setAndWaitCanShareOneContentUpdate) {
     EXPECT_TRUE(state.waitBarrier);
 }
 
+TEST(Fifo, reservedEpochIsInactiveUntilContentUpdateApplication) {
+    CFifoBarrierCondition condition;
+    const uint64_t        EPOCH = condition.reserveEpoch();
+
+    EXPECT_EQ(condition.activeEpoch(), 0);
+    EXPECT_FALSE(condition.matches(EPOCH));
+
+    condition.activate(EPOCH);
+    EXPECT_TRUE(condition.matches(EPOCH));
+}
+
+TEST(Fifo, bufferlessWaitBindsToNewestQueuedBarrier) {
+    CContentUpdateQueue queue;
+
+    SSurfaceState       barrier;
+    barrier.fifoBarrierEpoch = 7;
+    queue.enqueue(makeUnique<CContentUpdate>(barrier, WP<CWLSurfaceResource>{}));
+
+    SSurfaceState wait;
+    wait.waitBarrier   = true;
+    wait.fifoWaitEpoch = queue.latestFifoBarrierEpoch();
+
+    EXPECT_FALSE(wait.buffer);
+    EXPECT_EQ(wait.fifoWaitEpoch, barrier.fifoBarrierEpoch);
+}
+
 TEST(Fifo, conditionClearsOnlyForItsActiveEpoch) {
     CFifoBarrierCondition condition;
     const uint64_t        FIRST  = condition.reserveEpoch();
@@ -59,6 +85,32 @@ TEST(Fifo, epochAllocationSkipsReservedZeroOnWrap) {
 
     EXPECT_EQ(condition.reserveEpoch(), std::numeric_limits<uint64_t>::max());
     EXPECT_EQ(condition.reserveEpoch(), 1);
+}
+
+TEST(Fifo, clearingEpochPreservesOtherEpochsAndTimerConstraints) {
+    CContentUpdateQueue queue;
+
+    SSurfaceState       firstState;
+    firstState.fifoWaitEpoch = 11;
+    const auto FIRST         = queue.enqueue(makeUnique<CContentUpdate>(firstState, WP<CWLSurfaceResource>{}));
+    queue.addConstraint(FIRST, eContentUpdateConstraint::FIFO);
+    queue.addConstraint(FIRST, eContentUpdateConstraint::TIMER);
+
+    SSurfaceState secondState;
+    secondState.fifoWaitEpoch = 12;
+    const auto SECOND         = queue.enqueue(makeUnique<CContentUpdate>(secondState, WP<CWLSurfaceResource>{}));
+    queue.addConstraint(SECOND, eContentUpdateConstraint::FIFO);
+
+    queue.clearFifoEpoch(firstState.fifoWaitEpoch);
+    EXPECT_FALSE(FIRST->ready());
+    EXPECT_FALSE(SECOND->ready());
+
+    queue.clearConstraint(FIRST, eContentUpdateConstraint::TIMER);
+    EXPECT_TRUE(FIRST->ready());
+    EXPECT_FALSE(SECOND->ready());
+
+    queue.clearFifoEpoch(secondState.fifoWaitEpoch);
+    EXPECT_TRUE(SECOND->ready());
 }
 
 TEST(Fifo, queueReportsNewestBarrierEpoch) {
