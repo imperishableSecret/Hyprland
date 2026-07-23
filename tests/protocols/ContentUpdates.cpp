@@ -1,4 +1,5 @@
 #include <protocols/types/ContentUpdate.hpp>
+#include <managers/eventLoop/EventLoopManager.hpp>
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -28,6 +29,18 @@ class CContentUpdateTestAccess {
     static bool reachableFromDesynchronized(const CContentUpdateQueue& queue, const WP<CContentUpdate>& update) {
         std::vector<WP<CContentUpdate>> visiting;
         return queue.reachableFromDesynchronized(update, visiting);
+    }
+
+    static bool hasFenceWaiter(const CContentUpdate& update) {
+        return !!update.m_fenceWaiter;
+    }
+
+    static void setFenceWaiter(CContentUpdate& update, WP<SEventLoopReadableWaiter> waiter) {
+        update.setFenceWaiter(std::move(waiter));
+    }
+
+    static void refreshFenceConstraints(CContentUpdateQueue& queue, const std::function<bool(CContentUpdate&)>& ready) {
+        queue.refreshFenceConstraints(ready);
     }
 };
 
@@ -153,4 +166,59 @@ TEST(ContentUpdates, unpublishedDamageAccumulatesAcrossUpdates) {
 
     EXPECT_TRUE(DAMAGE.containsPoint({5, 5}));
     EXPECT_TRUE(DAMAGE.containsPoint({25, 25}));
+}
+
+TEST(ContentUpdates, fenceWakeRefreshesTheEntireQueue) {
+    SSurfaceState       state;
+    CContentUpdateQueue queue;
+    const auto          FIRST  = queue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}));
+    const auto          SECOND = queue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}));
+    const auto          THIRD  = queue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}));
+
+    queue.addConstraint(FIRST, eContentUpdateConstraint::FENCE);
+    queue.addConstraint(SECOND, eContentUpdateConstraint::FENCE);
+    queue.addConstraint(THIRD, eContentUpdateConstraint::FENCE);
+
+    size_t inspected = 0;
+    CContentUpdateTestAccess::refreshFenceConstraints(queue, [&inspected](CContentUpdate&) {
+        ++inspected;
+        return true;
+    });
+
+    EXPECT_EQ(inspected, 3U);
+    EXPECT_TRUE(FIRST->ready());
+    EXPECT_TRUE(SECOND->ready());
+    EXPECT_TRUE(THIRD->ready());
+}
+
+TEST(ContentUpdates, clearingFenceKeepsIndependentConstraints) {
+    SSurfaceState       state;
+    CContentUpdateQueue queue;
+    const auto          UPDATE = queue.enqueue(makeUnique<CContentUpdate>(state, WP<CWLSurfaceResource>{}));
+
+    queue.addConstraint(UPDATE, eContentUpdateConstraint::FENCE);
+    queue.addConstraint(UPDATE, eContentUpdateConstraint::FIFO);
+    queue.addConstraint(UPDATE, eContentUpdateConstraint::TIMER);
+    CContentUpdateTestAccess::refreshFenceConstraints(queue, [](CContentUpdate&) { return true; });
+
+    EXPECT_FALSE(UPDATE->ready());
+
+    queue.clearConstraint(UPDATE, eContentUpdateConstraint::FIFO);
+    EXPECT_FALSE(UPDATE->ready());
+
+    queue.clearConstraint(UPDATE, eContentUpdateConstraint::TIMER);
+    EXPECT_TRUE(UPDATE->ready());
+}
+
+TEST(ContentUpdates, clearingFenceReleasesItsWaiterHandle) {
+    SSurfaceState  state;
+    CContentUpdate update{state, {}};
+    const auto     WAITER = makeShared<SEventLoopReadableWaiter>(Hyprutils::OS::CFileDescriptor{}, [] {});
+
+    update.addConstraint(eContentUpdateConstraint::FENCE);
+    CContentUpdateTestAccess::setFenceWaiter(update, WAITER);
+    EXPECT_TRUE(CContentUpdateTestAccess::hasFenceWaiter(update));
+
+    update.clearConstraint(eContentUpdateConstraint::FENCE);
+    EXPECT_FALSE(CContentUpdateTestAccess::hasFenceWaiter(update));
 }

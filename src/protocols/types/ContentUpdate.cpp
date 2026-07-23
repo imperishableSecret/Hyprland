@@ -2,6 +2,7 @@
 
 #include "../PresentationTime.hpp"
 #include "../core/Compositor.hpp"
+#include "../../managers/eventLoop/EventLoopManager.hpp"
 
 #include <algorithm>
 
@@ -29,6 +30,10 @@ eContentUpdateConstraint operator~(eContentUpdateConstraint constraint) {
 
 CContentUpdate::CContentUpdate(const SSurfaceState& state, WP<CWLSurfaceResource> surface, eContentUpdateMode mode) : m_state(state), m_surface(std::move(surface)), m_mode(mode) {}
 
+CContentUpdate::~CContentUpdate() {
+    cancelFenceWaiter();
+}
+
 SSurfaceState& CContentUpdate::state() {
     return m_state;
 }
@@ -54,6 +59,8 @@ void CContentUpdate::addConstraint(eContentUpdateConstraint constraint) {
 void CContentUpdate::clearConstraint(eContentUpdateConstraint constraint) {
     ASSERT(constraint != eContentUpdateConstraint::NONE);
     m_constraints &= ~constraint;
+    if ((constraint & eContentUpdateConstraint::FENCE) != eContentUpdateConstraint::NONE)
+        cancelFenceWaiter();
 }
 
 bool CContentUpdate::addDependency(WP<CContentUpdate> dependency) {
@@ -68,6 +75,11 @@ bool CContentUpdate::addDependency(WP<CContentUpdate> dependency) {
 void CContentUpdate::addActivation(std::move_only_function<void()>&& activation) {
     ASSERT(!m_finalized);
     m_activations.emplace_back(std::move(activation));
+}
+
+void CContentUpdate::setFenceWaiter(WP<SEventLoopReadableWaiter> waiter) {
+    cancelFenceWaiter();
+    m_fenceWaiter = std::move(waiter);
 }
 
 bool CContentUpdate::ready() const {
@@ -85,6 +97,12 @@ void CContentUpdate::finalize() {
 void CContentUpdate::applyState() {
     for (auto& activation : m_activations)
         activation();
+}
+
+void CContentUpdate::cancelFenceWaiter() {
+    if (g_pEventLoopManager)
+        g_pEventLoopManager->removeOnReadable(m_fenceWaiter);
+    m_fenceWaiter.reset();
 }
 
 void CContentUpdate::removeDependency(const WP<CContentUpdate>& dependency) {
@@ -134,13 +152,27 @@ void CContentUpdateQueue::clearConstraint(const WP<CContentUpdate>& update, eCon
     tryProcess();
 }
 
+void CContentUpdateQueue::refreshFenceConstraints(const std::function<bool(CContentUpdate&)>& ready) {
+    bool changed = false;
+    for (const auto& update : m_queue) {
+        if ((update->m_constraints & eContentUpdateConstraint::FENCE) == eContentUpdateConstraint::NONE || !ready(*update))
+            continue;
+
+        update->clearConstraint(eContentUpdateConstraint::FENCE);
+        changed = true;
+    }
+
+    if (changed)
+        tryProcess();
+}
+
 void CContentUpdateQueue::clearFirstConstraints(eContentUpdateConstraint constraints) {
     ASSERT(constraints != eContentUpdateConstraint::NONE);
     for (const auto& update : m_queue) {
         if ((update->m_constraints & constraints) == eContentUpdateConstraint::NONE)
             continue;
 
-        update->m_constraints &= ~constraints;
+        update->clearConstraint(constraints);
         break;
     }
 
@@ -301,6 +333,9 @@ void CContentUpdateQueue::registerCandidates() {
 }
 
 void CContentUpdateQueue::tryProcess() {
+    if (!PROTO::compositor)
+        return;
+
     registerCandidates();
     PROTO::compositor->processContentUpdates();
 }

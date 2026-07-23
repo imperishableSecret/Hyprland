@@ -10,7 +10,7 @@
 class CWLSurfaceResource;
 class CDRMSyncobjTimelineResource;
 class CSyncTimeline;
-struct SReadableWaiter;
+struct SEventLoopReadableWaiter;
 
 class CDRMSyncPointState {
   public:
@@ -21,7 +21,7 @@ class CDRMSyncPointState {
     const uint64_t&                                  point();
     WP<CSyncTimeline>                                timeline();
     Hyprutils::Memory::CUniquePointer<CSyncReleaser> createSyncRelease();
-    WP<SReadableWaiter>                              addWaiter(std::function<void()>&& waiter);
+    WP<SEventLoopReadableWaiter>                     addWaiter(std::function<void()>&& waiter);
     bool                                             committed();
     Hyprutils::OS::CFileDescriptor                   exportAsFD();
     void                                             signal();

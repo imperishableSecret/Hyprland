@@ -123,7 +123,8 @@ class CWLSurfaceResource {
     SP<CWLSurfaceResource>                 findWithCM();
     void                                   presentFeedback(const Time::steady_tp& when, PHLMONITOR pMonitor, bool discarded = false);
     void                                   scheduleUpdate(WP<CContentUpdate> update);
-    void                                   drainSyncFds(WP<CContentUpdate> update);
+    void                                   refreshFenceConstraints();
+    bool                                   refreshFenceConstraint(CContentUpdate& update);
     void                                   applyUpdate(CContentUpdate& update, bool accumulateDamage);
     void                                   publishUpdate();
     bool                                   effectivelySynchronized() const;

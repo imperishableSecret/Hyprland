@@ -21,27 +21,17 @@ struct SEventLoopDoLaterLock {
     uint64_t seq = 0;
 };
 
-struct SReadableWaiter {
-    wl_event_source*               source;
+struct SEventLoopReadableWaiter {
+    wl_event_source*               source = nullptr;
     Hyprutils::OS::CFileDescriptor fd;
     std::function<void()>          fn;
+    bool                           failed = false;
 
-    SReadableWaiter(wl_event_source* src, Hyprutils::OS::CFileDescriptor f, std::function<void()> func) : source(src), fd(std::move(f)), fn(std::move(func)) {}
+    SEventLoopReadableWaiter(Hyprutils::OS::CFileDescriptor fd_, std::function<void()> fn_);
+    ~SEventLoopReadableWaiter();
 
-    ~SReadableWaiter() {
-        if (source) {
-            wl_event_source_remove(source);
-            source = nullptr;
-        }
-    }
-
-    // copy
-    SReadableWaiter(const SReadableWaiter&)            = delete;
-    SReadableWaiter& operator=(const SReadableWaiter&) = delete;
-
-    // move
-    SReadableWaiter(SReadableWaiter&& other) noexcept            = default;
-    SReadableWaiter& operator=(SReadableWaiter&& other) noexcept = default;
+    SEventLoopReadableWaiter(const SEventLoopReadableWaiter&)            = delete;
+    SEventLoopReadableWaiter& operator=(const SEventLoopReadableWaiter&) = delete;
 };
 
 class CEventLoopManager {
@@ -72,10 +62,12 @@ class CEventLoopManager {
         std::vector<std::pair<uint64_t, std::function<void()>>> fns;
     };
 
-    WP<SReadableWaiter> doOnReadable(Hyprutils::OS::CFileDescriptor fd, std::function<void()>&& fn);
-    void                removeReadableWaiter(const WP<SReadableWaiter>& waiter);
-    void                onFdReadable(SReadableWaiter* waiter);
-    void                onFdReadableFail(SReadableWaiter* waiter);
+    // schedule function to when fd is readable (WL_EVENT_READABLE / POLLIN),
+    // takes ownership of fd
+    WP<SEventLoopReadableWaiter> doOnReadable(Hyprutils::OS::CFileDescriptor fd, std::function<void()>&& fn);
+    void                         removeOnReadable(const WP<SEventLoopReadableWaiter>& waiter);
+    void                         onFdReadable(SEventLoopReadableWaiter* waiter);
+    void                         onFdReadableFail(SEventLoopReadableWaiter* waiter);
 
   private:
     // Manages the event sources after AQ pollFDs change.
@@ -99,9 +91,9 @@ class CEventLoopManager {
         bool                             recalcScheduled = false;
     } m_timers;
 
-    SIdleData                        m_idle;
-    std::map<int, SEventSourceData>  m_aqEventSources;
-    std::vector<UP<SReadableWaiter>> m_readableWaiters;
+    SIdleData                                 m_idle;
+    std::map<int, SEventSourceData>           m_aqEventSources;
+    std::vector<SP<SEventLoopReadableWaiter>> m_readableWaiters;
 
     struct {
         CHyprSignalListener pollFDsChanged;

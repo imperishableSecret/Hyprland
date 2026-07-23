@@ -12,7 +12,6 @@ namespace Render {
 class CDRMSyncPointState;
 class CWLCallbackResource;
 class CPresentationFeedback;
-struct SReadableWaiter;
 
 class CFifoBarrierCondition {
   public:

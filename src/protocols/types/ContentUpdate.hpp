@@ -10,6 +10,7 @@
 
 class CWLSurfaceResource;
 class CWLCompositorProtocol;
+struct SEventLoopReadableWaiter;
 
 enum class eContentUpdateMode : uint8_t {
     SYNCHRONIZED,
@@ -33,6 +34,7 @@ eContentUpdateConstraint  operator~(eContentUpdateConstraint constraint);
 class CContentUpdate {
   public:
     CContentUpdate(const SSurfaceState& state, WP<CWLSurfaceResource> surface, eContentUpdateMode mode = eContentUpdateMode::DESYNCHRONIZED);
+    ~CContentUpdate();
 
     SSurfaceState&         state();
     const SSurfaceState&   state() const;
@@ -53,11 +55,14 @@ class CContentUpdate {
     eContentUpdateMode                           m_mode        = eContentUpdateMode::DESYNCHRONIZED;
     eContentUpdateConstraint                     m_constraints = eContentUpdateConstraint::NONE;
     std::vector<std::move_only_function<void()>> m_activations;
+    WP<SEventLoopReadableWaiter>                 m_fenceWaiter;
     bool                                         m_finalized = false;
     bool                                         m_applied   = false;
 
     void                                         finalize();
     void                                         applyState();
+    void                                         setFenceWaiter(WP<SEventLoopReadableWaiter> waiter);
+    void                                         cancelFenceWaiter();
     bool                                         addDependency(WP<CContentUpdate> dependency);
     void                                         removeDependency(const WP<CContentUpdate>& dependency);
 
@@ -96,9 +101,11 @@ class CContentUpdateQueue {
     void                                                    convertToDesynchronized(const WP<CContentUpdate>& update);
     bool                                                    isCandidate(const WP<CContentUpdate>& update) const;
     bool                                                    reachableFromDesynchronized(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& visiting) const;
+    void                                                    refreshFenceConstraints(const std::function<bool(CContentUpdate&)>& ready);
     void                                                    removeApplied();
     void                                                    registerCandidates();
 
     friend class CWLCompositorProtocol;
+    friend class CWLSurfaceResource;
     friend class CContentUpdateTestAccess;
 };

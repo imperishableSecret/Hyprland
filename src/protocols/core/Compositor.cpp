@@ -603,50 +603,66 @@ CBox CWLSurfaceResource::extends() {
 }
 
 void CWLSurfaceResource::scheduleUpdate(WP<CContentUpdate> update) {
-    auto whenReadable = [this, surface = m_self](const WP<CContentUpdate>& update) {
-        if (!surface || !update)
-            return;
-
-        m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
-    };
-
     auto& state = update->state();
-    if (state.updated.bits.acquire) {
-        // wait on acquire point for this surface, from explicit sync protocol
-        if (!state.acquire.addWaiter([update, whenReadable]() { whenReadable(update); })) {
-            Log::logger->log(Log::ERR, "Failed to addWaiter in CWLSurfaceResource::scheduleUpdate");
-            whenReadable(update);
-        }
-    } else if (state.buffer && state.buffer->isSynchronous()) {
+    if (state.buffer && state.buffer->isSynchronous()) {
         // synchronous (shm) buffers can be read immediately
         m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
-    } else if (state.buffer && !state.buffer->m_syncFds.empty()) {
-        // async buffer and is dmabuf, then we can wait on implicit fences
-        drainSyncFds(update);
-    } else {
+    } else if ((state.updated.bits.acquire || (state.buffer && !state.buffer->m_syncFds.empty())))
+        refreshFenceConstraints();
+    else
         // state commit without a buffer.
         m_contentUpdates.tryProcess();
-    }
 }
 
-void CWLSurfaceResource::drainSyncFds(WP<CContentUpdate> update) {
-    auto& fds = update->state().buffer->m_syncFds;
+void CWLSurfaceResource::refreshFenceConstraints() {
+    m_contentUpdates.refreshFenceConstraints([this](CContentUpdate& update) { return refreshFenceConstraint(update); });
+}
 
-    std::erase_if(fds, [](const auto& fd) { return fd.isReadable(); });
-
-    if (!fds.empty()) {
-        auto fd = std::move(fds.front());
-        fds.erase(fds.begin());
-        g_pEventLoopManager->doOnReadable(std::move(fd), [this, surface = m_self, update]() {
-            if (!surface || !update)
-                return;
-
-            drainSyncFds(update);
+bool CWLSurfaceResource::refreshFenceConstraint(CContentUpdate& update) {
+    auto& state        = update.state();
+    auto  whenReadable = [surface = m_self] {
+        g_pEventLoopManager->doLater([surface] {
+            if (surface)
+                surface->refreshFenceConstraints();
         });
-        return;
+    };
+
+    if (state.updated.bits.acquire) {
+        const auto SIGNALED = state.acquire.timeline()->check(state.acquire.point(), 0u);
+        if (!SIGNALED.has_value() || *SIGNALED)
+            return true;
+
+        if (update.m_fenceWaiter)
+            return update.m_fenceWaiter->failed;
+
+        auto waiter = state.acquire.addWaiter(std::move(whenReadable));
+        if (!waiter) {
+            Log::logger->log(Log::ERR, "Failed to add explicit fence waiter in CWLSurfaceResource::refreshFenceConstraint");
+            return true;
+        }
+
+        update.setFenceWaiter(std::move(waiter));
+        return false;
     }
 
-    m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::FENCE);
+    if (!state.buffer)
+        return true;
+
+    if (update.m_fenceWaiter) {
+        if (!update.m_fenceWaiter->fd.isReadable() && !update.m_fenceWaiter->failed)
+            return false;
+        update.cancelFenceWaiter();
+    }
+
+    auto& fds = state.buffer->m_syncFds;
+    std::erase_if(fds, [](const auto& fd) { return fd.isReadable(); });
+    if (fds.empty())
+        return true;
+
+    auto fd = std::move(fds.front());
+    fds.erase(fds.begin());
+    update.setFenceWaiter(g_pEventLoopManager->doOnReadable(std::move(fd), std::move(whenReadable)));
+    return false;
 }
 
 void CWLSurfaceResource::applyUpdate(CContentUpdate& update, bool accumulateDamage) {
@@ -1178,7 +1194,7 @@ void CWLCompositorProtocol::processContentUpdates() {
         });
 
         const auto candidates = m_contentUpdateCandidates;
-        for (const auto& candidate : candidates) {
+        for (const auto& candidate : candidates | std::views::reverse) {
             if (!candidate)
                 continue;
 
