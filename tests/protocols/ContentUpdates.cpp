@@ -1,4 +1,5 @@
 #include <protocols/types/ContentUpdate.hpp>
+#include <protocols/core/Compositor.hpp>
 #include <managers/eventLoop/EventLoopManager.hpp>
 
 #include <gtest/gtest.h>
@@ -33,6 +34,14 @@ class CContentUpdateTestAccess {
 
     static bool hasFenceWaiter(const CContentUpdate& update) {
         return !!update.m_fenceWaiter;
+    }
+
+    static bool readyIgnoring(const CContentUpdate& update, eContentUpdateConstraint constraints) {
+        return update.readyIgnoring(constraints);
+    }
+
+    static std::optional<Time::steady_tp> contentUpdateTarget(const std::vector<WP<CContentUpdate>>& graph) {
+        return CWLCompositorProtocol::contentUpdateTarget(graph);
     }
 
     static void setFenceWaiter(CContentUpdate& update, WP<SEventLoopReadableWaiter> waiter) {
@@ -208,6 +217,40 @@ TEST(ContentUpdates, clearingFenceKeepsIndependentConstraints) {
 
     queue.clearConstraint(UPDATE, eContentUpdateConstraint::TIMER);
     EXPECT_TRUE(UPDATE->ready());
+}
+
+TEST(ContentUpdates, ignoringTimerStillRequiresEveryOtherConstraint) {
+    SSurfaceState  state;
+    CContentUpdate update{state, {}};
+
+    update.addConstraint(eContentUpdateConstraint::FENCE);
+    update.addConstraint(eContentUpdateConstraint::FIFO);
+    update.addConstraint(eContentUpdateConstraint::TIMER);
+
+    EXPECT_FALSE(CContentUpdateTestAccess::readyIgnoring(update, eContentUpdateConstraint::TIMER));
+
+    update.clearConstraint(eContentUpdateConstraint::FENCE);
+    EXPECT_FALSE(CContentUpdateTestAccess::readyIgnoring(update, eContentUpdateConstraint::TIMER));
+
+    update.clearConstraint(eContentUpdateConstraint::FIFO);
+    EXPECT_TRUE(CContentUpdateTestAccess::readyIgnoring(update, eContentUpdateConstraint::TIMER));
+    EXPECT_FALSE(update.ready());
+}
+
+TEST(ContentUpdates, effectiveTargetIsLatestTargetInCandidateGraph) {
+    SSurfaceState firstState;
+    firstState.commitTimingTarget = Time::steady_tp{std::chrono::seconds{12}};
+    const auto    FIRST           = makeShared<CContentUpdate>(firstState, WP<CWLSurfaceResource>{});
+
+    SSurfaceState secondState;
+    secondState.commitTimingTarget               = Time::steady_tp{std::chrono::seconds{10}};
+    const auto                            SECOND = makeShared<CContentUpdate>(secondState, WP<CWLSurfaceResource>{});
+
+    const std::vector<WP<CContentUpdate>> graph{FIRST, SECOND};
+    const auto                            TARGET = CContentUpdateTestAccess::contentUpdateTarget(graph);
+
+    ASSERT_TRUE(TARGET.has_value());
+    EXPECT_EQ(*TARGET, *firstState.commitTimingTarget);
 }
 
 TEST(ContentUpdates, clearingFenceReleasesItsWaiterHandle) {

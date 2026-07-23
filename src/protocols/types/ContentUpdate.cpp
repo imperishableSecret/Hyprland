@@ -86,6 +86,10 @@ bool CContentUpdate::ready() const {
     return m_constraints == eContentUpdateConstraint::NONE;
 }
 
+bool CContentUpdate::readyIgnoring(eContentUpdateConstraint constraints) const {
+    return (m_constraints & ~constraints) == eContentUpdateConstraint::NONE;
+}
+
 bool CContentUpdate::finalized() const {
     return m_finalized;
 }

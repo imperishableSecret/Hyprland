@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <vector>
 #include "WaylandProtocol.hpp"
 #include "commit-timing-v1.hpp"
@@ -8,8 +9,6 @@
 #include "helpers/time/Time.hpp"
 
 class CWLSurfaceResource;
-class CEventLoopTimer;
-class CContentUpdate;
 
 class CCommitTimerResource {
   public:
@@ -20,12 +19,6 @@ class CCommitTimerResource {
   private:
     UP<CWpCommitTimerV1>   m_resource;
     WP<CWLSurfaceResource> m_surface;
-
-    // Content Updates this timer has constrained and not yet released; drained by the per-present path.
-    std::vector<WP<CContentUpdate>> m_pendingTimedUpdates;
-
-    // Release the TIMER constraint on updates whose target is at or before the upcoming flip.
-    void releaseDueStates(const Time::steady_tp& upcomingFlip);
 
     struct {
         CHyprSignalListener surfaceContentUpdate;
@@ -55,7 +48,6 @@ class CCommitTimingProtocol : public IWaylandProtocol {
   private:
     void destroyResource(CCommitTimingManagerResource* resource);
     void destroyResource(CCommitTimerResource* resource);
-    void onMonitorPresent(PHLMONITOR m, const Time::steady_tp& presentTime);
     //
     std::vector<UP<CCommitTimingManagerResource>> m_managers;
     std::vector<UP<CCommitTimerResource>>         m_timers;
@@ -67,3 +59,8 @@ class CCommitTimingProtocol : public IWaylandProtocol {
 namespace PROTO {
     inline UP<CCommitTimingProtocol> commitTiming;
 };
+
+namespace NCommitTiming {
+    bool                            validTimestamp(uint32_t tvNsec);
+    std::optional<Time::steady_dur> timerDelay(const Time::steady_tp& target, const Time::steady_tp& now);
+}

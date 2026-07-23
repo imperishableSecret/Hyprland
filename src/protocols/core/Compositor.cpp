@@ -1091,11 +1091,12 @@ void CWLCompositorProtocol::registerContentUpdateCandidate(WP<CContentUpdate> up
     m_contentUpdateCandidates.emplace_back(std::move(update));
 }
 
-bool CWLCompositorProtocol::collectContentUpdateGraph(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& graph, std::vector<WP<CContentUpdate>>& visiting) {
+bool CWLCompositorProtocol::collectContentUpdateGraph(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& graph, std::vector<WP<CContentUpdate>>& visiting,
+                                                      eContentUpdateConstraint ignoredConstraints) {
     if (!update || update->m_applied || std::ranges::find(graph, update) != graph.end())
         return true;
 
-    if (!update->finalized() || !update->ready())
+    if (!update->finalized() || !update->readyIgnoring(ignoredConstraints))
         return false;
 
     if (std::ranges::find(visiting, update) != visiting.end()) {
@@ -1105,13 +1106,13 @@ bool CWLCompositorProtocol::collectContentUpdateGraph(const WP<CContentUpdate>& 
 
     visiting.emplace_back(update);
 
-    if (!collectContentUpdateGraph(update->m_previous, graph, visiting)) {
+    if (!collectContentUpdateGraph(update->m_previous, graph, visiting, ignoredConstraints)) {
         visiting.pop_back();
         return false;
     }
 
     for (const auto& dependency : update->m_dependencies) {
-        if (collectContentUpdateGraph(dependency, graph, visiting))
+        if (collectContentUpdateGraph(dependency, graph, visiting, ignoredConstraints))
             continue;
 
         visiting.pop_back();
@@ -1121,6 +1122,43 @@ bool CWLCompositorProtocol::collectContentUpdateGraph(const WP<CContentUpdate>& 
     visiting.pop_back();
     graph.emplace_back(update);
     return true;
+}
+
+std::optional<Time::steady_tp> CWLCompositorProtocol::effectiveContentUpdateTarget(const WP<CContentUpdate>& update) {
+    if (!update || !update->finalized())
+        return std::nullopt;
+
+    for (const auto& candidate : m_contentUpdateCandidates | std::views::reverse) {
+        if (!candidate)
+            continue;
+
+        const auto SURFACE = candidate->m_surface.lock();
+        if (!SURFACE || !SURFACE->m_contentUpdates.isCandidate(candidate))
+            continue;
+
+        std::vector<WP<CContentUpdate>> graph;
+        std::vector<WP<CContentUpdate>> visiting;
+        if (!collectContentUpdateGraph(candidate, graph, visiting, eContentUpdateConstraint::TIMER) || std::ranges::find(graph, update) == graph.end())
+            continue;
+
+        return contentUpdateTarget(graph);
+    }
+
+    return std::nullopt;
+}
+
+std::optional<Time::steady_tp> CWLCompositorProtocol::contentUpdateTarget(const std::vector<WP<CContentUpdate>>& graph) {
+    std::optional<Time::steady_tp> target;
+    for (const auto& update : graph) {
+        if (!update)
+            continue;
+
+        const auto& updateTarget = update->state().commitTimingTarget;
+        if (updateTarget && (!target || *updateTarget > *target))
+            target = updateTarget;
+    }
+
+    return target;
 }
 
 bool CWLCompositorProtocol::applyContentUpdateGraph(const std::vector<WP<CContentUpdate>>& graph) {

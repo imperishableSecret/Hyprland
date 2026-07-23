@@ -113,7 +113,6 @@ void SSurfaceState::reset() {
     fifoBarrierEpoch = 0;
     fifoWaitEpoch    = 0;
 
-    pendingTimeout.reset();
     commitTimingTarget.reset();
     timer.reset(); // CEventLoopManager::nudgeTimers should handle it eventually
 }

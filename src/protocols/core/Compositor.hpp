@@ -185,6 +185,10 @@ class CWLCompositorProtocol : public IWaylandProtocol {
 
     void         forEachSurface(std::function<void(SP<CWLSurfaceResource>)> fn);
 
+    // Returns the latest target in the newest candidate DAG containing update,
+    // but only while every non-timer constraint in that DAG is satisfied.
+    std::optional<Time::steady_tp> effectiveContentUpdateTarget(const WP<CContentUpdate>& update);
+
     struct {
         CSignalT<SP<CWLSurfaceResource>> newSurface;
     } m_events;
@@ -192,11 +196,13 @@ class CWLCompositorProtocol : public IWaylandProtocol {
   private:
     void registerContentUpdateCandidate(WP<CContentUpdate> update);
     void processContentUpdates();
-    bool collectContentUpdateGraph(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& graph, std::vector<WP<CContentUpdate>>& visiting);
-    bool applyContentUpdateGraph(const std::vector<WP<CContentUpdate>>& graph);
-    void destroyResource(CWLCompositorResource* resource);
-    void destroyResource(CWLSurfaceResource* resource);
-    void destroyResource(CWLRegionResource* resource);
+    bool collectContentUpdateGraph(const WP<CContentUpdate>& update, std::vector<WP<CContentUpdate>>& graph, std::vector<WP<CContentUpdate>>& visiting,
+                                   eContentUpdateConstraint ignoredConstraints = eContentUpdateConstraint::NONE);
+    static std::optional<Time::steady_tp> contentUpdateTarget(const std::vector<WP<CContentUpdate>>& graph);
+    bool                                  applyContentUpdateGraph(const std::vector<WP<CContentUpdate>>& graph);
+    void                                  destroyResource(CWLCompositorResource* resource);
+    void                                  destroyResource(CWLSurfaceResource* resource);
+    void                                  destroyResource(CWLRegionResource* resource);
 
     //
     std::vector<SP<CWLCompositorResource>> m_managers;
@@ -211,6 +217,7 @@ class CWLCompositorProtocol : public IWaylandProtocol {
     friend class CWLCompositorResource;
     friend class CWLRegionResource;
     friend class CWLCallbackResource;
+    friend class CContentUpdateTestAccess;
 };
 
 namespace PROTO {

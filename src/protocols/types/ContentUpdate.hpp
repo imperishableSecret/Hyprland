@@ -63,6 +63,7 @@ class CContentUpdate {
     void                                         applyState();
     void                                         setFenceWaiter(WP<SEventLoopReadableWaiter> waiter);
     void                                         cancelFenceWaiter();
+    bool                                         readyIgnoring(eContentUpdateConstraint constraints) const;
     bool                                         addDependency(WP<CContentUpdate> dependency);
     void                                         removeDependency(const WP<CContentUpdate>& dependency);
 

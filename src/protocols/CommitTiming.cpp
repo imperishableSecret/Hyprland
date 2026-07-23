@@ -1,10 +1,19 @@
 #include "CommitTiming.hpp"
 #include "core/Compositor.hpp"
-#include "../output/Monitor.hpp"
-#include "../event/EventBus.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
 #include "../managers/eventLoop/EventLoopTimer.hpp"
 #include <algorithm>
+
+bool NCommitTiming::validTimestamp(uint32_t tvNsec) {
+    return tvNsec < 1'000'000'000;
+}
+
+std::optional<Time::steady_dur> NCommitTiming::timerDelay(const Time::steady_tp& target, const Time::steady_tp& now) {
+    if (target <= now)
+        return std::nullopt;
+
+    return target - now;
+}
 
 CCommitTimerResource::CCommitTimerResource(UP<CWpCommitTimerV1>&& resource_, SP<CWLSurfaceResource> surface) : m_resource(std::move(resource_)), m_surface(surface) {
     if UNLIKELY (!m_resource->resource())
@@ -20,7 +29,12 @@ CCommitTimerResource::CCommitTimerResource(UP<CWpCommitTimerV1>&& resource_, SP<
             return;
         }
 
-        if (m_surface->m_pending.pendingTimeout.has_value()) {
+        if (!NCommitTiming::validTimestamp(tvNsec)) {
+            r->error(WP_COMMIT_TIMER_V1_ERROR_INVALID_TIMESTAMP, "Invalid nanoseconds in timestamp");
+            return;
+        }
+
+        if (m_surface->m_pending.commitTimingTarget.has_value()) {
             r->error(WP_COMMIT_TIMER_V1_ERROR_TIMESTAMP_EXISTS, "Timestamp is already set");
             return;
         }
@@ -30,58 +44,33 @@ CCommitTimerResource::CCommitTimerResource(UP<CWpCommitTimerV1>&& resource_, SP<
             .tv_nsec = sc<long>(tvNsec),
         };
 
-        const auto delay = Time::till(target);
-
-        if (delay.count() <= 0) {
-            m_surface->m_pending.pendingTimeout.reset();
-            m_surface->m_pending.commitTimingTarget.reset();
-        } else {
-            m_surface->m_pending.pendingTimeout     = delay;
-            m_surface->m_pending.commitTimingTarget = Time::fromTimespec(&target);
-        }
+        m_surface->m_pending.commitTimingTarget = Time::fromTimespec(&target);
     });
 
     m_listeners.surfaceContentUpdate = m_surface->m_events.contentUpdate.listen([this](const WP<CContentUpdate>& update) {
-        if (!update || !update->state().pendingTimeout.has_value() || !m_surface || m_surface->isTearing())
+        if (!update || !m_surface)
+            return;
+
+        auto& state = update->state();
+        if (!state.commitTimingTarget)
+            return;
+
+        const auto DELAY = NCommitTiming::timerDelay(*state.commitTimingTarget, Time::steadyNow());
+        if (!DELAY)
             return;
 
         update->addConstraint(eContentUpdateConstraint::TIMER);
 
-        std::erase_if(m_pendingTimedUpdates, [](const WP<CContentUpdate>& pending) { return !pending; });
-        m_pendingTimedUpdates.emplace_back(update);
+        state.timer = makeShared<CEventLoopTimer>(
+            *DELAY,
+            [surface = m_surface, update](SP<CEventLoopTimer> self, void* data) {
+                if (!surface || !update)
+                    return;
 
-        auto& state = update->state();
-        if (!state.timer) {
-            state.timer = makeShared<CEventLoopTimer>(
-                state.pendingTimeout,
-                [surface = m_surface, update](SP<CEventLoopTimer> self, void* data) {
-                    if (!surface || !update)
-                        return;
-
-                    surface->m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::TIMER);
-                },
-                nullptr);
-            g_pEventLoopManager->addTimer(state.timer);
-        } else
-            state.timer->updateTimeout(state.pendingTimeout);
-
-        state.pendingTimeout.reset();
-    });
-}
-
-void CCommitTimerResource::releaseDueStates(const Time::steady_tp& upcomingFlip) {
-    if (!m_surface)
-        return;
-
-    std::erase_if(m_pendingTimedUpdates, [this, &upcomingFlip](const WP<CContentUpdate>& update) {
-        if (!update)
-            return true;
-
-        if (!update->state().commitTimingTarget.has_value() || *update->state().commitTimingTarget > upcomingFlip)
-            return false; // not due yet, keep waiting
-
-        m_surface->m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::TIMER);
-        return true;
+                surface->m_contentUpdates.clearConstraint(update, eContentUpdateConstraint::TIMER);
+            },
+            nullptr);
+        g_pEventLoopManager->addTimer(state.timer);
     });
 }
 
@@ -136,31 +125,7 @@ bool CCommitTimingManagerResource::good() {
 }
 
 CCommitTimingProtocol::CCommitTimingProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
-    static auto P = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR M) {
-        M->m_events.presented.listenStatic([this, m = PHLMONITORREF{M}](const Time::steady_tp& presentTime) {
-            if (!m || !PROTO::commitTiming)
-                return;
-
-            onMonitorPresent(m.lock(), presentTime);
-        });
-    });
-}
-
-void CCommitTimingProtocol::onMonitorPresent(PHLMONITOR m, const Time::steady_tp& presentTime) {
-    if (!m || m->m_refreshRate <= 0.F)
-        return;
-
-    const auto UPCOMING_FLIP = presentTime + std::chrono::nanoseconds(static_cast<int64_t>(1'000'000'000.0 / m->m_refreshRate));
-    for (const auto& timer : m_timers) {
-        if (!timer->m_surface)
-            continue;
-
-        const auto& OUTPUTS = timer->m_surface->m_enteredOutputs;
-        if (OUTPUTS.size() != 1 || OUTPUTS[0] != m)
-            continue;
-
-        timer->releaseDueStates(UPCOMING_FLIP);
-    }
+    ;
 }
 
 void CCommitTimingProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
