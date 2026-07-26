@@ -40,8 +40,6 @@ class CEventLoopManager {
     ~CEventLoopManager();
 
     void enterLoop();
-    void onAquamarineFDReadable(Aquamarine::SPollFD& pollFD);
-    void requestWaylandFlushAfterAquamarineDispatch();
 
     // Note: will remove the timer if the ptr is lost.
     void addTimer(SP<CEventLoopTimer> timer);
@@ -82,10 +80,9 @@ class CEventLoopManager {
     };
 
     struct {
-        wl_event_loop*   loop         = nullptr;
-        wl_display*      display      = nullptr;
-        wl_event_source* eventSource  = nullptr;
-        bool             flushPending = false;
+        wl_event_loop*   loop        = nullptr;
+        wl_display*      display     = nullptr;
+        wl_event_source* eventSource = nullptr;
     } m_wayland;
 
     struct {

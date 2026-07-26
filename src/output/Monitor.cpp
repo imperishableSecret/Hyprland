@@ -209,7 +209,6 @@ void CMonitor::onConnect(bool noRule) {
         m_lastPresentationTimer.reset();
 
         m_events.presented.emit(PRESENTATION_TIME);
-        g_pEventLoopManager->requestWaylandFlushAfterAquamarineDispatch();
     });
 
     m_listeners.destroy = m_output->events.destroy.listen([this] {
