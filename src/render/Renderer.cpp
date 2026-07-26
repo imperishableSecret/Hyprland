@@ -2088,6 +2088,16 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     if (!g_pCompositor->m_sessionActive)
         return {};
 
+    pMonitor->m_renderingActive = true;
+    CScopeGuard frameDemandGuard([&]() {
+        const bool PENDING_FRAME    = pMonitor->m_pendingFrame;
+        pMonitor->m_pendingFrame    = false;
+        pMonitor->m_renderingActive = false;
+
+        if (PENDING_FRAME)
+            pMonitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
+    });
+
     Event::bus()->m_events.render.preChecks.emit(pMonitor);
 
     if (Animation::mgr())
@@ -2148,15 +2158,12 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     Event::bus()->m_events.render.stage.emit(RENDER_PRE);
 
-    pMonitor->m_renderingActive      = true;
     bool        renderSetupSucceeded = false;
-    CScopeGuard renderingGuard([&]() {
-        pMonitor->m_renderingActive = false;
+    CScopeGuard renderSetupGuard([&]() {
         if (renderSetupSucceeded)
             return;
 
-        pMonitor->m_pendingFrame = false;
-        pMonitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
+        pMonitor->m_pendingFrame = true;
     });
 
     // Most frames have no fading-out windows or layers for this monitor.
@@ -2307,16 +2314,11 @@ CFileDescriptor IHyprRenderer::renderMonitor(PHLMONITOR pMonitor, bool commit) {
     if (commit)
         commitPendingAndDoExplicitSync(pMonitor);
 
-    // cleared only after the commit
-    pMonitor->m_renderingActive = false;
-
     if (shouldTear)
         pMonitor->m_tearingState.busy = true;
 
-    if (*PDAMAGEBLINK || *PVFR == 0 || pMonitor->m_pendingFrame)
-        pMonitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
-
-    pMonitor->m_pendingFrame = false;
+    if (*PDAMAGEBLINK || *PVFR == 0)
+        pMonitor->m_pendingFrame = true;
 
     if (*PDEBUGOVERLAY == 1) {
         const float durationUs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - renderStart).count() / 1000.f;

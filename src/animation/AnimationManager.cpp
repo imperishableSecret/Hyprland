@@ -32,7 +32,7 @@ static int wlTick(SP<CEventLoopTimer> self, void* data) {
 }
 
 CHyprAnimationManager::CHyprAnimationManager() {
-    m_animationTimer = makeShared<CEventLoopTimer>(std::chrono::microseconds(500), wlTick, nullptr);
+    m_animationTimer = makeShared<CEventLoopTimer>(std::nullopt, wlTick, nullptr);
     if (g_pEventLoopManager) // null in --verify-config mode
         g_pEventLoopManager->addTimer(m_animationTimer);
 
@@ -342,6 +342,9 @@ void CHyprAnimationManager::tick() {
 }
 
 void CHyprAnimationManager::frameTick() {
+    if (m_animationTimer && m_animationTimer->armed() && g_pEventLoopManager)
+        m_animationTimer->updateTimeout(std::nullopt);
+
     onTicked();
 
     if (!shouldTickForNext())
@@ -350,16 +353,8 @@ void CHyprAnimationManager::frameTick() {
     if UNLIKELY (!g_pCompositor->m_sessionActive || !std::ranges::any_of(State::monitorState()->monitors(), [](const auto& mon) { return mon->m_enabled && mon->m_output; }))
         return;
 
-    if (!m_lastTickValid || m_lastTickTimer.getMillis() >= 1.0f) {
-        m_lastTickTimer.reset();
-        m_lastTickValid = true;
-
-        tick();
-        Event::bus()->m_events.tick.emit();
-    }
-
-    if (shouldTickForNext())
-        scheduleTick();
+    tick();
+    Event::bus()->m_events.tick.emit();
 }
 
 void CHyprAnimationManager::scheduleTick() {
@@ -373,7 +368,9 @@ void CHyprAnimationManager::scheduleTick() {
         return;
     }
 
-    m_animationTimer->updateTimeout(std::chrono::milliseconds(1));
+    // Hyprutils requests the first tick before adding the new variable to the
+    // active list. Defer once so the bootstrap tick sees the completed list.
+    m_animationTimer->updateTimeout(std::chrono::microseconds(1));
 }
 
 void CHyprAnimationManager::onTicked() {
@@ -381,8 +378,13 @@ void CHyprAnimationManager::onTicked() {
 }
 
 void CHyprAnimationManager::resetTickState() {
-    m_lastTickValid = false;
     m_tickScheduled = false;
+
+    if (m_animationTimer && m_animationTimer->armed() && g_pEventLoopManager)
+        m_animationTimer->updateTimeout(std::nullopt);
+
+    if (shouldTickForNext())
+        scheduleTick();
 }
 
 std::string CHyprAnimationManager::styleValidInConfigVar(const std::string& config, const std::string& style) {
