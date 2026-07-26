@@ -70,7 +70,7 @@ static int timerWrite(int fd, uint32_t mask, void* data) {
 
 static int aquamarineFDWrite(int fd, uint32_t mask, void* data) {
     auto POLLFD = sc<Aquamarine::SPollFD*>(data);
-    POLLFD->onSignal();
+    g_pEventLoopManager->onAquamarineFDReadable(*POLLFD);
     return 0;
 }
 
@@ -151,6 +151,20 @@ void CEventLoopManager::enterLoop() {
     wl_display_run(m_wayland.display);
 
     Log::logger->log(Log::DEBUG, "Kicked off the event loop! :(");
+}
+
+void CEventLoopManager::onAquamarineFDReadable(Aquamarine::SPollFD& pollFD) {
+    pollFD.onSignal();
+
+    if (!m_wayland.flushPending)
+        return;
+
+    m_wayland.flushPending = false;
+    wl_display_flush_clients(m_wayland.display);
+}
+
+void CEventLoopManager::requestWaylandFlushAfterAquamarineDispatch() {
+    m_wayland.flushPending = true;
 }
 
 void CEventLoopManager::onTimerFire() {
